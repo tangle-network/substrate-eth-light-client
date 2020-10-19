@@ -26,6 +26,10 @@ frame-support = { git = "https://github.com/paritytech/substrate.git", default-f
 frame-system = { git = "https://github.com/paritytech/substrate.git", default-features = false }
 pallet-timestamp = { git = "https://github.com/paritytech/substrate.git", default-features = false }
 lite-json = { version = "0.1", default-features = false }
+ethereum = { version = "0.3", default-features = false, features = ["codec"] }
+ethereum-types = { version = "0.9.2", default-features = false }
+rlp = { version = "0.4", default-features = false }
+sha3 = { version = "0.8", default-features = false }
 
 [features]
 default = ['std']
@@ -41,4 +45,8 @@ std = [
 	"frame-system/std",
 	"pallet-timestamp/std",
 	"lite-json/std",
+	"ethereum/std",
+	"ethereum-types/std",
+	"rlp/std",
+	"sha3/std",
 ]

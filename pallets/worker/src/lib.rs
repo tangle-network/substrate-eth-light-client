@@ -10,13 +10,15 @@ use frame_support::{
 	debug, decl_module, decl_storage, decl_event,
 	traits::Get,
 };
-use sp_core::crypto::KeyTypeId;
+
 use sp_runtime::{
 	transaction_validity::{
 		ValidTransaction, TransactionValidity, TransactionSource,
 		TransactionPriority,
 	},
 };
+
+// pub mod eth;
 
 /// This pallet's configuration trait
 pub trait Trait: CreateSignedTransaction<Call<Self>> {

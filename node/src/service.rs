@@ -201,7 +201,6 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
 			config: grandpa_config,
 			link: grandpa_link,
 			network,
-			inherent_data_providers,
 			telemetry_on_connect: Some(telemetry_connection_sinks.on_connect_stream()),
 			voting_rule: sc_finality_grandpa::VotingRulesBuilder::default().build(),
 			prometheus_registry,
@@ -216,9 +215,7 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
 		);
 	} else {
 		sc_finality_grandpa::setup_disabled_grandpa(
-			client,
-			&inherent_data_providers,
-			network,
+			network.clone(),
 		)?;
 	}
 
