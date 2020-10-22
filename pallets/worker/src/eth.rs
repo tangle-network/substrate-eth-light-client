@@ -1,5 +1,5 @@
 use sp_core::{H128, H256, H512};
-
+use rlp;
 
 #[derive(Default, Debug, Clone, Encode, Decode)]
 pub struct DoubleNodeWithMerkleProof {
@@ -94,18 +94,17 @@ impl Default for EthClient {
     }
 }
 
-#[near_bindgen]
 impl EthClient {
     #[init]
     pub fn init(
-        #[serializer(borsh)] validate_ethash: bool,
-        #[serializer(borsh)] dags_start_epoch: u64,
-        #[serializer(borsh)] dags_merkle_roots: Vec<H128>,
-        #[serializer(borsh)] first_header: Vec<u8>,
-        #[serializer(borsh)] hashes_gc_threshold: u64,
-        #[serializer(borsh)] finalized_gc_threshold: u64,
-        #[serializer(borsh)] num_confirmations: u64,
-        #[serializer(borsh)] trusted_signer: Option<AccountId>,
+        validate_ethash: bool,
+        dags_start_epoch: u64,
+        dags_merkle_roots: Vec<H128>,
+        first_header: Vec<u8>,
+        hashes_gc_threshold: u64,
+        finalized_gc_threshold: u64,
+        num_confirmations: u64,
+        trusted_signer: Option<AccountId>,
     ) -> Self {
         assert!(!Self::initialized(), "Already initialized");
         let header: BlockHeader = rlp::decode(first_header.as_slice()).unwrap();
@@ -141,17 +140,14 @@ impl EthClient {
         res
     }
 
-    #[result_serializer(borsh)]
     pub fn initialized() -> bool {
         env::state_read::<EthClient>().is_some()
     }
 
-    #[result_serializer(borsh)]
-    pub fn dag_merkle_root(&self, #[serializer(borsh)] epoch: u64) -> H128 {
+    pub fn dag_merkle_root(&self, epoch: u64) -> H128 {
         self.dags_merkle_roots[(&epoch - self.dags_start_epoch) as usize]
     }
 
-    #[result_serializer(borsh)]
     pub fn last_block_number(&self) -> u64 {
         self.infos
             .get(&self.best_header_hash)
@@ -160,19 +156,16 @@ impl EthClient {
     }
 
     /// Returns the block hash from the canonical chain.
-    #[result_serializer(borsh)]
     pub fn block_hash(&self, #[serializer(borsh)] index: u64) -> Option<H256> {
         self.canonical_header_hashes.get(&index)
     }
 
     /// Returns all hashes known for that height.
-    #[result_serializer(borsh)]
     pub fn known_hashes(&self, #[serializer(borsh)] index: u64) -> Vec<H256> {
         self.all_header_hashes.get(&index).unwrap_or_default()
     }
 
     /// Returns block hash and the number of confirmations.
-    #[result_serializer(borsh)]
     pub fn block_hash_safe(&self, #[serializer(borsh)] index: u64) -> Option<H256> {
         let header_hash = self.block_hash(index)?;
         let last_block_number = self.last_block_number();
@@ -186,7 +179,6 @@ impl EthClient {
     /// Add the block header to the client.
     /// `block_header` -- RLP-encoded Ethereum header;
     /// `dag_nodes` -- dag nodes with their merkle proofs.
-    #[result_serializer(borsh)]
     pub fn add_block_header(
         &mut self,
         #[serializer(borsh)] block_header: Vec<u8>,
