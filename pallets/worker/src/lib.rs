@@ -160,30 +160,35 @@ impl<T: Trait> Module<T> {
 
 		// decode JSON into object
 		let val = lite_json::parse_json(&body_str).unwrap();
+		println!("{:?}", val);
 
 		// get { "result": VAL }
+		let mut result_key = "result".chars();
 		let block = match val {
 			JsonValue::Object(obj) => {
 				obj.into_iter()
-					.find(|(k, _)| k.iter().all(|k| Some(*k) == "result".chars().next()))
-					.and_then(|v| match v.1 {
-						JsonValue::Object(block) => Some(block),
-						_ => None,
+					.find(|(k, _)| k.iter().all(|k| Some(*k) == result_key.next()))
+					.and_then(|v| {
+						match v.1 {
+							JsonValue::Object(block) => Some(block),
+							_ => None,
+						}
 					})
 			},
 			_ => None
 		};
+		println!("{:?}", block);
 
-		// get { "number": VAL }
-		let number_hex = block.unwrap().into_iter()
-			.find(|(k, _)| k.iter().all(|k| Some(*k) == "number".chars().next()))
+		// get { "number": VAL } and convert from hex string -> decimal
+		let mut number_key = "number".chars();
+		let number_hex: String = block.unwrap().into_iter()
+			.find(|(k, _)| k.iter().all(|k| Some(*k) == number_key.next()))
 			.and_then(|v| match v.1 {
 				JsonValue::String(n) => Some(n),
 				_ => None,
-			}).unwrap();
-		// TODO: convert number_hex (Vec<char>) into a number!!
-		debug::info!("{:?}", number_hex);
-		Ok(0)
+			}).unwrap().into_iter().collect();
+			let number_no_prefix = number_hex.trim_start_matches("0x");
+			Ok(u32::from_str_radix(&number_no_prefix, 16).unwrap())
 	}
 }
 
