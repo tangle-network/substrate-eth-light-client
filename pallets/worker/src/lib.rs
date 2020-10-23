@@ -139,7 +139,7 @@ decl_module! {
 impl<T: Trait> Module<T> {
 	fn fetch_block() -> Result<u32, http::Error> {
 		// Make a post request to an eth chain
-		let body = b"{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"latest\", false],\"id\":1}";
+		let body = br#"{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest", false],"id":1}"#;
 		let request: http::Request = http::Request::post(
 			"http://localhost:8545",
 			[ &body[..] ].to_vec(),
