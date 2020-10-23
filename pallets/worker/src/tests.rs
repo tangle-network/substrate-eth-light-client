@@ -1,22 +1,17 @@
 use crate::*;
-use std::sync::Arc;
 use codec::{Encode, Decode};
 use frame_support::{
-	assert_ok, impl_outer_origin, parameter_types,
+	impl_outer_origin, parameter_types,
 	weights::Weight,
 };
 use sp_core::{
 	H256,
-	offchain::{OffchainExt, TransactionPoolExt, testing},
+	offchain::{OffchainExt, testing},
 	sr25519::Signature,
 };
 
-use sp_keystore::{
-	{KeystoreExt, SyncCryptoStore},
-	testing::KeyStore,
-};
 use sp_runtime::{
-	Perbill, RuntimeAppPublic,
+	Perbill,
 	testing::{Header, TestXt},
 	traits::{
 		BlakeTwo256, IdentityLookup, Extrinsic as ExtrinsicT,
@@ -129,9 +124,11 @@ fn should_make_http_call_and_parse_result() {
 }
 
 fn set_block_response(state: &mut testing::OffchainState) {
+  let body = b"{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"latest\", false],\"id\":1}";
 	state.expect_request(testing::PendingRequest {
 		method: "POST".into(),
-		uri: "http://localhost:8545".into(),
+    uri: "http://localhost:8545".into(),
+    body: body.to_vec(),
 		response: Some(br#"{"id":1,"jsonrpc":"2.0","result":{"number":"0x5","hash":"0xd756d4751404de219bc92a9353a285e5f2b0331837c0c24d5f2fc3ada0016426","parentHash":"0x0000000000000000000000000000000000000000000000000000000000000000","mixHash":"0x0000000000000000000000000000000000000000000000000000000000000000","nonce":"0x0000000000000000","sha3Uncles":"0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347","logsBloom":"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","transactionsRoot":"0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421","stateRoot":"0x168891299ae735112da2019ffc37e837cf5891273f781f3b26ea67432d5b33d1","receiptsRoot":"0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421","miner":"0x0000000000000000000000000000000000000000","difficulty":"0x0","totalDifficulty":"0x0","extraData":"0x","size":"0x3e8","gasLimit":"0x6691b7","gasUsed":"0x0","timestamp":"0x5f92ed56","transactions":[],"uncles":[]}}"#.to_vec()),
 		sent: true,
 		..Default::default()

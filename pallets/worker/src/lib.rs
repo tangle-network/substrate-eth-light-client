@@ -10,7 +10,7 @@ use frame_support::{
 	debug, decl_module, decl_storage, decl_event,
 	traits::Get,
 };
-
+use sp_core::crypto::KeyTypeId;
 use sp_runtime::{
 	transaction_validity::{
 		ValidTransaction, TransactionValidity, TransactionSource,
@@ -22,6 +22,38 @@ use lite_json::json::JsonValue;
 use sp_std::prelude::Vec;
 
 // pub mod eth;
+
+#[cfg(test)]
+mod tests;
+
+/// Defines application identifier for crypto keys of this module.
+///
+/// Every module that deals with signatures needs to declare its unique identifier for
+/// its crypto keys.
+/// When offchain worker is signing transactions it's going to request keys of type
+/// `KeyTypeId` from the keystore and use the ones it finds to sign the transaction.
+/// The keys can be inserted manually via RPC (see `author_insertKey`).
+pub const KEY_TYPE: KeyTypeId = KeyTypeId(*b"btc!");
+
+/// Based on the above `KeyTypeId` we need to generate a pallet-specific crypto type wrappers.
+/// We can use from supported crypto kinds (`sr25519`, `ed25519` and `ecdsa`) and augment
+/// the types with this pallet-specific identifier.
+pub mod crypto {
+	use super::KEY_TYPE;
+	use sp_runtime::{
+		app_crypto::{app_crypto, sr25519},
+		traits::Verify,
+	};
+	use sp_core::sr25519::Signature as Sr25519Signature;
+	app_crypto!(sr25519, KEY_TYPE);
+
+	pub struct TestAuthId;
+	impl frame_system::offchain::AppCrypto<<Sr25519Signature as Verify>::Signer, Sr25519Signature> for TestAuthId {
+		type RuntimeAppPublic = Public;
+		type GenericSignature = sp_core::sr25519::Signature;
+		type GenericPublic = sp_core::sr25519::Public;
+	}
+}
 
 /// This pallet's configuration trait
 pub trait Trait: CreateSignedTransaction<Call<Self>> {
@@ -149,8 +181,8 @@ impl<T: Trait> Module<T> {
 				JsonValue::String(n) => Some(n),
 				_ => None,
 			}).unwrap();
-		debug::warn!("{:?}", number_hex);
 		// TODO: convert number_hex (Vec<char>) into a number!!
+		debug::info!("{:?}", number_hex);
 		Ok(0)
 	}
 }
