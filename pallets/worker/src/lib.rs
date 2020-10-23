@@ -160,14 +160,12 @@ impl<T: Trait> Module<T> {
 
 		// decode JSON into object
 		let val = lite_json::parse_json(&body_str).unwrap();
-		println!("{:?}", val);
 
 		// get { "result": VAL }
-		let mut result_key = "result".chars();
 		let block = match val {
 			JsonValue::Object(obj) => {
 				obj.into_iter()
-					.find(|(k, _)| k.iter().all(|k| Some(*k) == result_key.next()))
+					.find(|(k, _)| k.into_iter().collect::<String>() == "result")
 					.and_then(|v| {
 						match v.1 {
 							JsonValue::Object(block) => Some(block),
@@ -177,12 +175,10 @@ impl<T: Trait> Module<T> {
 			},
 			_ => None
 		};
-		println!("{:?}", block);
 
 		// get { "number": VAL } and convert from hex string -> decimal
-		let mut number_key = "number".chars();
 		let number_hex: String = block.unwrap().into_iter()
-			.find(|(k, _)| k.iter().all(|k| Some(*k) == number_key.next()))
+			.find(|(k, _)| k.into_iter().collect::<String>() == "number")
 			.and_then(|v| match v.1 {
 				JsonValue::String(n) => Some(n),
 				_ => None,

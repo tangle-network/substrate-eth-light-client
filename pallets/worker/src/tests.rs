@@ -129,7 +129,7 @@ fn set_block_response(state: &mut testing::OffchainState) {
 		method: "POST".into(),
     uri: "http://localhost:8545".into(),
     body: body.to_vec(),
-		response: Some(br#"{ "result": { "number":"0x5" } }"#.to_vec()),
+		response: Some(br#"{"jsonrpc":"2.0","id":1,"result":{"number":"0x5"}}"#.to_vec()),
 		sent: true,
 		..Default::default()
 	});
