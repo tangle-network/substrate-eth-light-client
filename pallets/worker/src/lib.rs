@@ -16,10 +16,11 @@ use sp_runtime::{
 		ValidTransaction, TransactionValidity, TransactionSource,
 		TransactionPriority,
 	},
-	offchain::{http, Duration, storage::StorageValueRef},
+	offchain::{http},
 };
 use lite_json::json::JsonValue;
 use sp_std::prelude::Vec;
+use sp_core::U256;
 
 // pub mod eth;
 
@@ -98,52 +99,58 @@ decl_module! {
 			// We can easily import `frame_system` and retrieve a block hash of the parent block.
 			let parent_hash = <system::Module<T>>::block_hash(block_number - 1.into());
 			debug::debug!("Current block: {:?} (parent hash: {:?})", block_number, parent_hash);
-
-			// Make a post request to an eth chain
-			let body = b"{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"latest\", false],\"id\":1}";
-			let request: http::Request = http::Request::post(
-				"http://localhost:8545",
-				[ &body[..] ].to_vec(),
-			);
-			let pending = request.send().unwrap();
-
-			// wait indefinitely for response (TODO: timeout)
-			let mut response = pending.wait().unwrap();
-			let mut headers = response.headers().into_iter();
-			assert_eq!(headers.current(), None);
-
-			// and collect the body
-			let body = response.body().collect::<Vec<u8>>();
-			let body_str = sp_std::str::from_utf8(&body).map_err(|_| {
-				debug::warn!("No UTF8 body");
-				http::Error::Unknown
-			}).unwrap();
-
-			// decode JSON into object
-			let val = lite_json::parse_json(&body_str).unwrap();
-
-			// get { "result": VAL }
-			let block = match val {
-				JsonValue::Object(obj) => {
-					obj.into_iter()
-						.find(|(k, _)| k.iter().all(|k| Some(*k) == "result".chars().next()))
-						.and_then(|v| match v.1 {
-							JsonValue::Object(block) => Some(block),
-							_ => None,
-						})
-				},
-				_ => None
-			};
-
-			// get { "number": VAL }
-			let number = block.unwrap().into_iter()
-				.find(|(k, _)| k.iter().all(|k| Some(*k) == "number".chars().next()))
-				.and_then(|v| match v.1 {
-					JsonValue::String(n) => Some(n),
-					_ => None,
-				}).unwrap();
+			let number = Self::fetch_block().unwrap();
 			debug::info!("{:?}", number);
 		}
+	}
+}
+
+impl<T: Trait> Module<T> {
+	fn fetch_block() -> Result<u32, http::Error> {
+		// Make a post request to an eth chain
+		let body = b"{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"latest\", false],\"id\":1}";
+		let request: http::Request = http::Request::post(
+			"http://localhost:8545",
+			[ &body[..] ].to_vec(),
+		);
+		let pending = request.send().unwrap();
+
+		// wait indefinitely for response (TODO: timeout)
+		let mut response = pending.wait().unwrap();
+		let mut headers = response.headers().into_iter();
+		assert_eq!(headers.current(), None);
+
+		// and collect the body
+		let body = response.body().collect::<Vec<u8>>();
+		let body_str = sp_std::str::from_utf8(&body).map_err(|_| {
+			debug::warn!("No UTF8 body");
+			http::Error::Unknown
+		}).unwrap();
+
+		// decode JSON into object
+		let val = lite_json::parse_json(&body_str).unwrap();
+
+		// get { "result": VAL }
+		let block = match val {
+			JsonValue::Object(obj) => {
+				obj.into_iter()
+					.find(|(k, _)| k.iter().all(|k| Some(*k) == "result".chars().next()))
+					.and_then(|v| match v.1 {
+						JsonValue::Object(block) => Some(block),
+						_ => None,
+					})
+			},
+			_ => None
+		};
+
+		// get { "number": VAL }
+		let number_hex = block.unwrap().into_iter()
+			.find(|(k, _)| k.iter().all(|k| Some(*k) == "number".chars().next()))
+			.and_then(|v| match v.1 {
+				JsonValue::String(n) => Some(n),
+				_ => None,
+			}).unwrap();
+		// TODO: convert number_hex (Vec<char>) into a number!!
 	}
 }
 
