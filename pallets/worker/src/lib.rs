@@ -20,7 +20,6 @@ use sp_runtime::{
 };
 use lite_json::json::JsonValue;
 use sp_std::prelude::Vec;
-use sp_core::U256;
 
 // pub mod eth;
 
@@ -117,7 +116,7 @@ impl<T: Trait> Module<T> {
 
 		// wait indefinitely for response (TODO: timeout)
 		let mut response = pending.wait().unwrap();
-		let mut headers = response.headers().into_iter();
+		let headers = response.headers().into_iter();
 		assert_eq!(headers.current(), None);
 
 		// and collect the body
@@ -150,7 +149,9 @@ impl<T: Trait> Module<T> {
 				JsonValue::String(n) => Some(n),
 				_ => None,
 			}).unwrap();
+		debug::warn!("{:?}", number_hex);
 		// TODO: convert number_hex (Vec<char>) into a number!!
+		Ok(0)
 	}
 }
 

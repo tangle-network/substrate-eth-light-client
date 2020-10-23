@@ -112,6 +112,22 @@ impl Trait for Test {
 
 type Example = Module<Test>;
 
+#[test]
+fn should_make_http_call_and_parse_result() {
+	let (offchain, state) = testing::TestOffchainExt::new();
+	let mut t = sp_io::TestExternalities::default();
+	t.register_extension(OffchainExt::new(offchain));
+
+	set_block_response(&mut state.write());
+
+	t.execute_with(|| {
+		// when
+		let number = Example::fetch_block().unwrap();
+		// then
+		assert_eq!(number, 5);
+	});
+}
+
 fn set_block_response(state: &mut testing::OffchainState) {
 	state.expect_request(testing::PendingRequest {
 		method: "POST".into(),
@@ -119,21 +135,5 @@ fn set_block_response(state: &mut testing::OffchainState) {
 		response: Some(br#"{"id":1,"jsonrpc":"2.0","result":{"number":"0x5","hash":"0xd756d4751404de219bc92a9353a285e5f2b0331837c0c24d5f2fc3ada0016426","parentHash":"0x0000000000000000000000000000000000000000000000000000000000000000","mixHash":"0x0000000000000000000000000000000000000000000000000000000000000000","nonce":"0x0000000000000000","sha3Uncles":"0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347","logsBloom":"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","transactionsRoot":"0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421","stateRoot":"0x168891299ae735112da2019ffc37e837cf5891273f781f3b26ea67432d5b33d1","receiptsRoot":"0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421","miner":"0x0000000000000000000000000000000000000000","difficulty":"0x0","totalDifficulty":"0x0","extraData":"0x","size":"0x3e8","gasLimit":"0x6691b7","gasUsed":"0x0","timestamp":"0x5f92ed56","transactions":[],"uncles":[]}}"#.to_vec()),
 		sent: true,
 		..Default::default()
-	});
-}
-
-#[test]
-fn should_make_http_call_and_parse_result() {
-	let (offchain, state) = testing::TestOffchainExt::new();
-	let mut t = sp_io::TestExternalities::default();
-	t.register_extension(OffchainExt::new(offchain));
-
-	price_oracle_response(&mut state.write());
-
-	t.execute_with(|| {
-		// when
-		let number = Example::fetch_block().unwrap();
-		// then
-		assert_eq!(number, 5);
 	});
 }
