@@ -95,7 +95,6 @@ impl Default for EthClient {
 }
 
 impl EthClient {
-    #[init]
     pub fn init(
         validate_ethash: bool,
         dags_start_epoch: u64,

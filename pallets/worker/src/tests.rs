@@ -119,7 +119,7 @@ fn should_make_http_call_and_parse_result() {
 		// when
 		let number = Example::fetch_block().unwrap();
 		// then
-		assert_eq!(number, 5);
+		assert_eq!(number, 8934751);
 	});
 }
 
@@ -129,7 +129,30 @@ fn set_block_response(state: &mut testing::OffchainState) {
 		method: "POST".into(),
     uri: "http://localhost:8545".into(),
     body: body.to_vec(),
-		response: Some(br#"{"jsonrpc":"2.0","id":1,"result":{"number":"0x5"}}"#.to_vec()),
+		response: Some(br#"{
+			"jsonrpc":"2.0",
+			"id":1,
+			"result":{
+			    "difficulty": "0x29d45538",
+			    "extraData": "0xdb830300018c4f70656e457468657265756d86312e34332e31826c69",
+			    "gasLimit": "0x7a121d",
+			    "gasUsed": "0xcb5e",
+			    "hash": "0xa03b310a4fa187d7aafe458323da848fe4e4ed610b0ca970818f8d76ff7acafc",
+			    "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000400400000000000000000000000000000000020000001000008000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000110000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000001000000000000000000000000",
+			    "miner": "0x05fc5a079e0583b8a07526023a16e2022c4c6296",
+			    "mixHash": "0xca855e662d1d628cdb218b1989386aceb1eab53eb4968fdf4220851db7f776a2",
+			    "nonce": "0x83e8ba4b86c92bee",
+			    "number": "0x88555f",
+			    "parentHash": "0xe607a9cfcdfd3e2f37b6097ca1a1070c1fa5b585d7a5d0ade47315e898a9d385",
+			    "receiptsRoot": "0x5d12aadaaec5d49a8e3e224db5c9cfb56c65b9f91ede8fa2c29a164839a999e7",
+			    "sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+			    "size": "0x2ce",
+			    "stateRoot": "0xbd460aaf576af40fe13a1457c5cb59aa420f16f5aceea0582b07393e8d767641",
+			    "timestamp": "0x5f930edb",
+			    "totalDifficulty": "0x70f44fb8647010",
+			    "transactionsRoot": "0x8dd40061cf130707ff20d40867a7c8ced409d30951604209eac4e08883c2d35d"
+			}
+		}"#.to_vec()),
 		sent: true,
 		..Default::default()
 	});

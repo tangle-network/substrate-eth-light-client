@@ -1,5 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+use sp_std::prelude::*;
+use codec::{Encode, Decode};
 use frame_system::{
 	self as system,
 	offchain::{
@@ -18,8 +20,11 @@ use sp_runtime::{
 	},
 	offchain::{http},
 };
+
 use lite_json::json::JsonValue;
-use sp_std::prelude::Vec;
+
+use ethereum_types::U256;
+use sp_core::{H256, H512};
 
 // pub mod eth;
 
@@ -86,8 +91,51 @@ pub trait Trait: CreateSignedTransaction<Call<Self>> {
 	type UnsignedPriority: Get<TransactionPriority>;
 }
 
+/// Minimal information about a header.
+#[derive(Encode, Decode)]
+pub struct HeaderInfo {
+    pub total_difficulty: U256,
+    pub parent_hash: H256,
+    pub number: u64,
+}
+
 decl_storage! {
-	trait Store for Module<T: Trait> as WorkerModule {}
+	trait Store for Module<T: Trait> as WorkerModule {
+	    /// The epoch from which the DAG merkle roots start.
+	    pub DAGsStartEpoch get(fn dags_start_epoch): u64;
+	    /// DAG merkle roots for the next several years.
+	    pub DAGsMerkleRoots get(fn dags_merkle_roots): Vec<H256>;
+	    /// Hash of the header that has the highest cumulative difficulty. The current head of the
+	    /// canonical chain.
+	    pub BestHeaderHash get(fn best_header_hash): H256;
+	    /// We store the hashes of the blocks for the past `hashes_gc_threshold` headers.
+	    /// Events that happen past this threshold cannot be verified by the client.
+	    /// It is desirable that this number is larger than 7 days worth of headers, which is roughly
+	    /// 40k Ethereum blocks. So this number should be 40k in production.
+	    pub HashesGCThreshold get(fn hashes_gc_threshold): u64;
+	    /// We store full information about the headers for the past `finalized_gc_threshold` blocks.
+	    /// This is required to be able to adjust the canonical chain when the fork switch happens.
+	    /// The commonly used number is 500 blocks, so this number should be 500 in production.
+	    pub FinalizedGCThreshold get(fn finalized_gc_threshold): u64;
+	    /// Number of confirmations that applications can use to consider the transaction safe.
+	    /// For most use cases 25 should be enough, for super safe cases it should be 500.
+	    pub NumConfirmations get(fn num_confirmations): u64;
+	    /// Hashes of the canonical chain mapped to their numbers. Stores up to `hashes_gc_threshold`
+	    /// entries.
+	    /// header number -> header hash
+	    pub CanonicalHeaderHashes get(fn canonical_header_hashes): map hasher(twox_64_concat) u64 => H256;
+	    /// All known header hashes. Stores up to `finalized_gc_threshold`.
+	    /// header number -> hashes of all headers with this number.
+	    pub AllHeaderHashes get(fn all_header_hashes): map hasher(twox_64_concat) u64 => Vec<H256>;
+	    /// Known headers. Stores up to `finalized_gc_threshold`.
+	    pub Headers get(fn headers): map hasher(twox_64_concat) H256 => Option<ethereum::Header>;
+	    /// Minimal information about the headers, like cumulative difficulty. Stores up to
+	    /// `finalized_gc_threshold`.
+	    pub Infos get(fn infos): map hasher(twox_64_concat) H256 => Option<HeaderInfo>;
+	    /// If set, block header added by trusted signer will skip validation and added by
+	    /// others will be immediately rejected, used in PoA testnets
+	    pub TrustedSigner get(fn trusted_signer): Option<T::AccountId>;
+	}
 }
 
 decl_event!(
@@ -157,8 +205,8 @@ impl<T: Trait> Module<T> {
 			debug::warn!("No UTF8 body");
 			http::Error::Unknown
 		}).unwrap();
-
 		// decode JSON into object
+		println!("{:?}", body_str);
 		let val = lite_json::parse_json(&body_str).unwrap();
 
 		// get { "result": VAL }
@@ -184,6 +232,7 @@ impl<T: Trait> Module<T> {
 				_ => None,
 			}).unwrap().into_iter().collect();
 			let number_no_prefix = number_hex.trim_start_matches("0x");
+			println!("{}", number_no_prefix);
 			Ok(u32::from_str_radix(&number_no_prefix, 16).unwrap())
 	}
 }
