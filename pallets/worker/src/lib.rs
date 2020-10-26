@@ -23,10 +23,10 @@ use sp_runtime::{
 	offchain::{http},
 };
 
-use lite_json::json::JsonValue;
+use lite_json::json::{JsonObject, JsonValue};
 
-use ethereum_types::{H128, U256};
-use sp_core::{H256};
+use ethereum_types::{H64, H128, H160, H256, U64, U256, Bloom};
+// use sp_core::{H256};
 
 // pub mod eth;
 
@@ -132,7 +132,7 @@ decl_storage! {
 		/// header number -> hashes of all headers with this number.
 		pub AllHeaderHashes get(fn all_header_hashes): map hasher(twox_64_concat) U256 => Vec<H256>;
 		/// Known headers. Stores up to `finalized_gc_threshold`.
-		pub Headers get(fn headers): map hasher(twox_64_concat) H256 => Option<ethereum::Header>;
+		pub Headers get(fn headers): map hasher(twox_64_concat) H256 => Option<ethereum::PartialHeader>;
 		/// Minimal information about the headers, like cumulative difficulty. Stores up to
 		/// `finalized_gc_threshold`.
 		pub Infos get(fn infos): map hasher(twox_64_concat) H256 => Option<HeaderInfo>;
@@ -179,15 +179,15 @@ decl_module! {
 			<NumConfirmations<T>>::set(Some(num_confirmations));
 			<TrustedSigner<T>>::set(trusted_signer);
 
-			let header: ethereum::Header = rlp::decode(first_header.as_slice()).unwrap();
+			let header: ethereum::PartialHeader = rlp::decode(first_header.as_slice()).unwrap();
 			let header_hash = header.hash();
 			let header_number = header.number;
 
-			<BestHeaderHash>::set(header_hash.clone());
-			<AllHeaderHashes>::insert(header_number, vec![header_hash]);
-			<CanonicalHeaderHashes>::insert(header_number, header_hash);
-			<Headers>::insert(header_hash, header.clone());
-			<Infos>::insert(header_hash, HeaderInfo {
+			<BestHeaderHash<T>>::set(header_hash.clone());
+			<AllHeaderHashes<T>>::insert(header_number, vec![header_hash]);
+			<CanonicalHeaderHashes<T>>::insert(header_number, header_hash);
+			<Headers<T>>::insert(header_hash, header.clone());
+			<Infos<T>>::insert(header_hash, HeaderInfo {
 				total_difficulty: header.difficulty,
 				parent_hash: header.parent_hash,
 				number: header.number,
@@ -234,6 +234,20 @@ fn hex_to_bytes(v: &[char]) -> Result<Vec<u8>, hex::FromHexError> {
 	};
 	let v_u8 = v_no_prefix.iter().map(|c| *c as u8).collect::<Vec<u8>>();
 	hex::decode(&v_u8[..])
+}
+
+fn object_key_hex(obj: &JsonObject, key: &[u8]) -> Option<Vec<u8>> {
+	obj.into_iter()
+		.find(|(k, _)| k.iter().map(|c| *c as u8).collect::<Vec<u8>>() == key.to_vec())
+		.and_then(|v| match &v.1 {
+			JsonValue::String(n) => {
+				match hex_to_bytes(&n[..]) {
+					Ok(b) => Some(b),
+					_ => None,
+				}
+			},
+			_ => None,
+		})
 }
 
 impl<T: Trait> Module<T> {
@@ -314,19 +328,56 @@ impl<T: Trait> Module<T> {
 					})
 			},
 			_ => None
+		}.unwrap();
+
+		// extract all header values
+		let hash_bytes = object_key_hex(&block, b"hash").unwrap();
+		let hash = H256::from_slice(&hash_bytes[..]);
+
+		let parent_hash = object_key_hex(&block, b"parentHash").unwrap();
+		let total_difficulty = object_key_hex(&block, b"totalDifficulty").unwrap();
+		let beneficiary = object_key_hex(&block, b"miner").unwrap();
+		let state_root = object_key_hex(&block, b"stateRoot").unwrap();
+		// let transactions_root = object_key_hex(&block, b"transactionsRoot").unwrap();
+		let receipts_root = object_key_hex(&block, b"receiptsRoot").unwrap();
+		let logs_bloom = object_key_hex(&block, b"logsBloom").unwrap();
+		let difficulty = object_key_hex(&block, b"difficulty").unwrap();
+		let number = object_key_hex(&block, b"number").unwrap();
+		let gas_limit = object_key_hex(&block, b"gasLimit").unwrap();
+		let gas_used = object_key_hex(&block, b"gasUsed").unwrap();
+		let timestamp = object_key_hex(&block, b"timestamp").unwrap();
+		let extra_data = object_key_hex(&block, b"extraData").unwrap();
+		let mix_hash = object_key_hex(&block, b"mixHash").unwrap();
+		let nonce = object_key_hex(&block, b"nonce").unwrap();
+
+		// we use partial header here because we don't have the ommers_hash in the rpc result
+		let header = ethereum::PartialHeader {
+			parent_hash: H256::from_slice(&parent_hash[..]),
+			beneficiary: H160::from_slice(&beneficiary[..]),
+			state_root: H256::from_slice(&state_root[..]),
+			receipts_root: H256::from_slice(&receipts_root[..]),
+			logs_bloom: Bloom::from_slice(&logs_bloom[..]),
+			difficulty: U256::from_big_endian(&difficulty[..]),
+			number: U256::from_big_endian(&number[..]),
+			gas_limit: U256::from_big_endian(&gas_limit[..]),
+			gas_used: U256::from_big_endian(&gas_used[..]),
+			timestamp: U64::from_big_endian(&timestamp[..]).low_u64(),
+			extra_data: extra_data,
+			mix_hash: H256::from_slice(&mix_hash[..]),
+			nonce: H64::from_slice(&nonce[..]),
 		};
 
-		// get { "number": VAL } and convert from hex string -> decimal
-		let number_hex: Vec<char> = block.unwrap().into_iter()
-			.find(|(k, _)| k.iter().map(|c| *c as u8).collect::<Vec<u8>>() == b"number")
-			.and_then(|v| match v.1 {
-				JsonValue::String(n) => Some(n),
-				_ => None,
-			})
-			.unwrap();
+		let header_info = HeaderInfo {
+			total_difficulty: U256::from_big_endian(&total_difficulty[..]),
+			parent_hash: H256::from_slice(&parent_hash[..]),
+			number: U256::from_big_endian(&number[..]),
+		}
 
-		let decoded_vec = hex_to_bytes(&number_hex[..]).unwrap();
-		Ok(U256::from_big_endian(&decoded_vec[..]).low_u32())
+		// update storage
+		<AllHeaderHashes<T>>::insert(number, vec![hash]);
+		<CanonicalHeaderHashes<T>>::insert(number, hash);
+		<Headers<T>>::insert(hash, header);
+		<Infos<T>>::insert(hash, header_info);
 	}
 }
 
