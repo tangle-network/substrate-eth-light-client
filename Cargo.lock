@@ -3042,9 +3042,8 @@ dependencies = [
 
 [[package]]
 name = "lite-json"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c73e713a23ac6e12074c9e96ef2dfb770921e0cb9244c093bd38424209e0e523"
+version = "0.1.3"
+source = "git+https://github.com/jnaviask/lite-json.git?branch=jnaviask.fix-empty-array-parsing#2d5b037ac3d33c6ed36dac5c3fc15ac77a206545"
 dependencies = [
  "lite-parser",
 ]
@@ -3052,8 +3051,7 @@ dependencies = [
 [[package]]
 name = "lite-parser"
 version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c50092e40e0ccd1bf2015a10333fde0502ff95b832b0895dc1ca0d7ac6c52f6"
+source = "git+https://github.com/jnaviask/lite-json.git?branch=jnaviask.fix-empty-array-parsing#2d5b037ac3d33c6ed36dac5c3fc15ac77a206545"
 dependencies = [
  "paste",
 ]
@@ -3850,6 +3848,7 @@ dependencies = [
  "ethereum-types",
  "frame-support",
  "frame-system",
+ "hex",
  "lite-json",
  "pallet-timestamp",
  "parity-scale-codec",

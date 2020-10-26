@@ -25,11 +25,12 @@ sp-runtime = { git = "https://github.com/paritytech/substrate.git", default-feat
 frame-support = { git = "https://github.com/paritytech/substrate.git", default-features = false }
 frame-system = { git = "https://github.com/paritytech/substrate.git", default-features = false }
 pallet-timestamp = { git = "https://github.com/paritytech/substrate.git", default-features = false }
-lite-json = { version = "0.1", default-features = false }
+lite-json = { git = "https://github.com/jnaviask/lite-json.git", branch = "jnaviask.fix-empty-array-parsing", default-features = false }
 ethereum = { version = "0.3", default-features = false, features = ["codec"] }
 ethereum-types = { version = "0.9.2", default-features = false }
 rlp = { version = "0.4", default-features = false }
 sha3 = { version = "0.8", default-features = false }
+hex = { version = "0.4", default-features = false }
 
 [features]
 default = ['std']
