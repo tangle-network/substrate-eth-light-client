@@ -371,13 +371,14 @@ impl<T: Trait> Module<T> {
 			total_difficulty: U256::from_big_endian(&total_difficulty[..]),
 			parent_hash: H256::from_slice(&parent_hash[..]),
 			number: U256::from_big_endian(&number[..]),
-		}
+		};
 
 		// update storage
-		<AllHeaderHashes<T>>::insert(number, vec![hash]);
-		<CanonicalHeaderHashes<T>>::insert(number, hash);
-		<Headers<T>>::insert(hash, header);
-		<Infos<T>>::insert(hash, header_info);
+		AllHeaderHashes::T::insert(number, vec![hash]);
+		CanonicalHeaderHashes::T::insert(number, hash);
+		Headers::T::insert(hash, header);
+		Infos::T::insert(hash, header_info);
+		Ok(number.low_u32())
 	}
 }
 
