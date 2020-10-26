@@ -238,6 +238,16 @@ decl_module! {
 	}
 }
 
+fn hex_to_bytes(v: &[char]) -> Result<Vec<u8>, hex::FromHexError> {
+	let v_no_prefix = if v.len() >= 2 && v[0] == '0' && v[1] == 'x' {
+		&v[2..]
+	} else {
+		&v[..]
+	};
+	let v_u8 = v_no_prefix.iter().map(|c| *c as u8).collect::<Vec<u8>>();
+	hex::decode(&v_u8[..])
+}
+
 impl<T: Trait> Module<T> {
     pub fn initialized() -> bool {
 		Self::dags_start_epoch().is_some()
@@ -309,14 +319,14 @@ impl<T: Trait> Module<T> {
 			http::Error::Unknown
 		}).unwrap();
 		// decode JSON into object
-		println!("{:?}", body_str);
+		// println!("{:?}", body_str);
 		let val = lite_json::parse_json(&body_str).unwrap();
 
 		// get { "result": VAL }
 		let block = match val {
 			JsonValue::Object(obj) => {
 				obj.into_iter()
-					.find(|(k, _)| k.into_iter().collect::<String>() == "result")
+					.find(|(k, _)| k.iter().map(|c| *c as u8).collect::<Vec<u8>>() == b"result".to_vec())
 					.and_then(|v| {
 						match v.1 {
 							JsonValue::Object(block) => Some(block),
@@ -328,15 +338,16 @@ impl<T: Trait> Module<T> {
 		};
 
 		// get { "number": VAL } and convert from hex string -> decimal
-		let number_hex: String = block.unwrap().into_iter()
-			.find(|(k, _)| k.into_iter().collect::<String>() == "number")
+		let number_hex: Vec<char> = block.unwrap().into_iter()
+			.find(|(k, _)| k.iter().map(|c| *c as u8).collect::<Vec<u8>>() == b"number")
 			.and_then(|v| match v.1 {
 				JsonValue::String(n) => Some(n),
 				_ => None,
-			}).unwrap().into_iter().collect();
-			let number_no_prefix = number_hex.trim_start_matches("0x");
-			println!("{}", number_no_prefix);
-			Ok(u32::from_str_radix(&number_no_prefix, 16).unwrap())
+			})
+			.unwrap();
+
+		let decoded_vec = hex_to_bytes(&number_hex[..]).unwrap();
+		Ok(U256::from_big_endian(&decoded_vec[..]).low_u32())
 	}
 }
 

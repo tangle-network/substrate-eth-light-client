@@ -151,7 +151,8 @@ fn set_block_response(state: &mut testing::OffchainState) {
 			    "stateRoot": "0xbd460aaf576af40fe13a1457c5cb59aa420f16f5aceea0582b07393e8d767641",
 			    "timestamp": "0x5f930edb",
 			    "totalDifficulty": "0x70f44fb8647010",
-			    "transactionsRoot": "0x8dd40061cf130707ff20d40867a7c8ced409d30951604209eac4e08883c2d35d"
+					"transactionsRoot": "0x8dd40061cf130707ff20d40867a7c8ced409d30951604209eac4e08883c2d35d",
+					"transactions": []
 			}
 		}"#.to_vec()),
 		sent: true,
