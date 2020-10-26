@@ -105,6 +105,7 @@ pub struct HeaderInfo {
 
 decl_storage! {
 	trait Store for Module<T: Trait> as WorkerModule {
+		/*
 		/// The epoch from which the DAG merkle roots start.
 		pub DAGsStartEpoch get(fn dags_start_epoch): Option<u64>;
 		/// DAG merkle roots for the next several years.
@@ -139,6 +140,7 @@ decl_storage! {
 		/// If set, block header added by trusted signer will skip validation and added by
 		/// others will be immediately rejected, used in PoA testnets
 		pub TrustedSigner get(fn trusted_signer): Option<T::AccountId>;
+		*/
 	}
 }
 
@@ -159,15 +161,16 @@ decl_module! {
 		#[weight = 0]
 		fn init(
 			origin,
-			dags_start_epoch: u64,
-			dags_merkle_roots: Vec<H128>,
-			first_header: Vec<u8>,
-			hashes_gc_threshold: T::Threshold,
-			finalized_gc_threshold: T::Threshold,
-			num_confirmations: T::Threshold,
-			trusted_signer: Option<T::AccountId>,
+			// dags_start_epoch: u64,
+			// dags_merkle_roots: Vec<H128>,
+			// first_header: Vec<u8>,
+			// hashes_gc_threshold: T::Threshold,
+			// finalized_gc_threshold: T::Threshold,
+			// num_confirmations: T::Threshold,
+			// trusted_signer: Option<T::AccountId>,
 		) {
 			let _signer = ensure_signed(origin)?;
+			/*
 			ensure!(Self::dags_start_epoch().is_none(), "Already initialized");
 			ensure!(Self::hashes_gc_threshold().is_none(), "Already initialized");
 			ensure!(Self::finalized_gc_threshold().is_none(), "Already initialized");
@@ -179,19 +182,20 @@ decl_module! {
 			<NumConfirmations<T>>::set(Some(num_confirmations));
 			<TrustedSigner<T>>::set(trusted_signer);
 
-			let header: ethereum::PartialHeader = rlp::decode(first_header.as_slice()).unwrap();
+			let header: ethereum::Header = rlp::decode(first_header.as_slice()).unwrap();
 			let header_hash = header.hash();
 			let header_number = header.number;
 
-			<BestHeaderHash<T>>::set(header_hash.clone());
-			<AllHeaderHashes<T>>::insert(header_number, vec![header_hash]);
-			<CanonicalHeaderHashes<T>>::insert(header_number, header_hash);
-			<Headers<T>>::insert(header_hash, header.clone());
-			<Infos<T>>::insert(header_hash, HeaderInfo {
+			<BestHeaderHash>::set(header_hash.clone());
+			<AllHeaderHashes>::insert(header_number, vec![header_hash]);
+			<CanonicalHeaderHashes>::insert(header_number, header_hash);
+			// <Headers>::insert(header_hash, header.clone());
+			<Infos>::insert(header_hash, HeaderInfo {
 				total_difficulty: header.difficulty,
 				parent_hash: header.parent_hash,
 				number: header.number,
 			});
+			*/
 		}
 
 		/// Offchain Worker entry point.
@@ -220,8 +224,8 @@ decl_module! {
 			// We can easily import `frame_system` and retrieve a block hash of the parent block.
 			let parent_hash = <system::Module<T>>::block_hash(block_number - 1.into());
 			debug::debug!("Current block: {:?} (parent hash: {:?})", block_number, parent_hash);
-			let number = Self::fetch_block().unwrap();
-			debug::info!("{:?}", number);
+			let header = Self::fetch_block().unwrap();
+			debug::info!("{:?}", header);
 		}
 	}
 }
@@ -251,8 +255,9 @@ fn object_key_hex(obj: &JsonObject, key: &[u8]) -> Option<Vec<u8>> {
 }
 
 impl<T: Trait> Module<T> {
+	/*
     pub fn initialized() -> bool {
-		Self::dags_start_epoch().is_some()
+			Self::dags_start_epoch().is_some()
     }
 
     pub fn dag_merkle_root(epoch: u64) -> H128 {
@@ -268,7 +273,8 @@ impl<T: Trait> Module<T> {
     		Some(header) => header.number,
     		None => U256::zero(),
     	}
-    }
+		}
+	*/
 
     // /// Returns the block hash from the canonical chain.
     // pub fn block_hash(index: u64) -> Option<H256> {
@@ -291,7 +297,7 @@ impl<T: Trait> Module<T> {
     //     }
     // }
 
-	fn fetch_block() -> Result<u32, http::Error> {
+	fn fetch_block() -> Result<ethereum::PartialHeader, http::Error> {
 		// Make a post request to an eth chain
 		let body = br#"{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest", false],"id":1}"#;
 		let request: http::Request = http::Request::post(
@@ -367,18 +373,18 @@ impl<T: Trait> Module<T> {
 			nonce: H64::from_slice(&nonce[..]),
 		};
 
-		let header_info = HeaderInfo {
+		let _header_info = HeaderInfo {
 			total_difficulty: U256::from_big_endian(&total_difficulty[..]),
 			parent_hash: H256::from_slice(&parent_hash[..]),
 			number: U256::from_big_endian(&number[..]),
 		};
 
 		// update storage
-		AllHeaderHashes::T::insert(number, vec![hash]);
-		CanonicalHeaderHashes::T::insert(number, hash);
-		Headers::T::insert(hash, header);
-		Infos::T::insert(hash, header_info);
-		Ok(number.low_u32())
+		// AllHeaderHashes::T::insert(number, vec![hash]);
+		// CanonicalHeaderHashes::T::insert(number, hash);
+		// Headers::T::insert(hash, header);
+		// Infos::T::insert(hash, header_info);
+		Ok(header)
 	}
 }
 

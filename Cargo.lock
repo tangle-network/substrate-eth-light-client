@@ -1209,22 +1209,22 @@ checksum = "71a6567e6fd35589fea0c63b94b4cf2e55573e413901bdbe60ab15cf0e25e5df"
 dependencies = [
  "crunchy",
  "fixed-hash",
- "impl-codec",
  "impl-rlp",
  "tiny-keccak",
 ]
 
 [[package]]
 name = "ethereum"
-version = "0.3.3"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da7fef4d2da1de3a4f4f85408379644276db9b46c4af7b0fe38a3debec5cb7cd"
+checksum = "7538b2bb55bde83b500c4e6ea0bdb3b1c0e9e5ae57951941e5412db32c2a8344"
 dependencies = [
  "ethereum-types",
  "parity-scale-codec",
  "rlp",
  "rlp-derive",
- "sha3 0.8.2",
+ "serde",
+ "sha3 0.9.1",
 ]
 
 [[package]]
@@ -1235,7 +1235,6 @@ checksum = "473aecff686bd8e7b9db0165cbbb53562376b39bf35b427f0c60446a9e1634b0"
 dependencies = [
  "ethbloom",
  "fixed-hash",
- "impl-codec",
  "impl-rlp",
  "primitive-types",
  "uint",

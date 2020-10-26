@@ -118,9 +118,9 @@ fn should_make_http_call_and_parse_result() {
 
 	t.execute_with(|| {
 		// when
-		let number = Example::fetch_block().unwrap();
+		let block = Example::fetch_block().unwrap();
 		// then
-		assert_eq!(number, 8934751);
+		assert_eq!(block.number.low_u32(), 8934751);
 	});
 }
 
