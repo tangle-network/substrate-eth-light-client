@@ -1,5 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+
 use codec::Codec;
 use frame_support::Parameter;
 use sp_runtime::traits::{
@@ -27,11 +28,10 @@ use sp_runtime::{
 	},
 	offchain::{http},
 };
-
 use lite_json::json::JsonValue;
-
+use sp_io::hashing::{sha2_256};
 use ethereum_types::{H128, U256};
-use sp_core::{H256};
+use sp_core::{H256, H512};
 
 // pub mod eth;
 
@@ -113,6 +113,44 @@ pub struct RpcUrl {
 	url: Vec<u8>,
 }
 
+#[derive(Clone, Encode, Decode)]
+pub struct DoubleNodeWithMerkleProof {
+	pub dag_nodes: Vec<H512>, // [H512; 2]
+	pub proof: Vec<H128>,
+}
+
+impl DoubleNodeWithMerkleProof {
+	fn truncate_to_h128(arr: H256) -> H128 {
+		let mut data = [0u8; 16];
+		data.copy_from_slice(&(arr.0)[16..]);
+		H128(data.into())
+	}
+
+	fn hash_h128(l: H128, r: H128) -> H128 {
+		let mut data = [0u8; 64];
+		data[16..32].copy_from_slice(&(l.0));
+		data[48..64].copy_from_slice(&(r.0));
+		Self::truncate_to_h128(sha2_256(&data).into())
+	}
+
+	pub fn apply_merkle_proof(&self, index: u64) -> H128 {
+		let mut data = [0u8; 128];
+		data[..64].copy_from_slice(&(self.dag_nodes[0].0));
+		data[64..].copy_from_slice(&(self.dag_nodes[1].0));
+
+		let mut leaf = Self::truncate_to_h128(sha2_256(&data).into());
+
+		for i in 0..self.proof.len() {
+			if (index >> i as u64) % 2 == 0 {
+				leaf = Self::hash_h128(leaf, self.proof[i]);
+			} else {
+				leaf = Self::hash_h128(self.proof[i], leaf);
+			}
+		}
+		leaf
+	}
+}
+
 decl_storage! {
 	trait Store for Module<T: Trait> as WorkerModule {
 		/// The epoch from which the DAG merkle roots start.
@@ -126,18 +164,18 @@ decl_storage! {
 		/// Events that happen past this threshold cannot be verified by the client.
 		/// It is desirable that this number is larger than 7 days worth of headers, which is roughly
 		/// 40k Ethereum blocks. So this number should be 40k in production.
-		pub HashesGCThreshold get(fn hashes_gc_threshold): Option<T::Threshold>;
+		pub HashesGCThreshold get(fn hashes_gc_threshold): Option<U256>;
 		/// We store full information about the headers for the past `finalized_gc_threshold` blocks.
 		/// This is required to be able to adjust the canonical chain when the fork switch happens.
 		/// The commonly used number is 500 blocks, so this number should be 500 in production.
-		pub FinalizedGCThreshold get(fn finalized_gc_threshold): Option<T::Threshold>;
+		pub FinalizedGCThreshold get(fn finalized_gc_threshold): Option<U256>;
 		/// Number of confirmations that applications can use to consider the transaction safe.
 		/// For most use cases 25 should be enough, for super safe cases it should be 500.
 		pub NumConfirmations get(fn num_confirmations): Option<U256>;
 		/// Hashes of the canonical chain mapped to their numbers. Stores up to `hashes_gc_threshold`
 		/// entries.
 		/// header number -> header hash
-		pub CanonicalHeaderHashes get(fn canonical_header_hashes): map hasher(twox_64_concat) U256 => H256;
+		pub CanonicalHeaderHashes get(fn canonical_header_hashes): map hasher(twox_64_concat) U256 => Option<H256>;
 		/// All known header hashes. Stores up to `finalized_gc_threshold`.
 		/// header number -> hashes of all headers with this number.
 		pub AllHeaderHashes get(fn all_header_hashes): map hasher(twox_64_concat) U256 => Vec<H256>;
@@ -174,8 +212,8 @@ decl_module! {
 			dags_start_epoch: u64,
 			dags_merkle_roots: Vec<H128>,
 			first_header: Vec<u8>,
-			hashes_gc_threshold: T::Threshold,
-			finalized_gc_threshold: T::Threshold,
+			hashes_gc_threshold: U256,
+			finalized_gc_threshold: U256,
 			num_confirmations: U256,
 			trusted_signer: Option<T::AccountId>,
 		) {
@@ -186,8 +224,8 @@ decl_module! {
 
 			<DAGsStartEpoch>::set(Some(dags_start_epoch));
 			<DAGsMerkleRoots>::set(dags_merkle_roots);
-			<HashesGCThreshold<T>>::set(Some(hashes_gc_threshold));
-			<FinalizedGCThreshold<T>>::set(Some(finalized_gc_threshold));
+			<HashesGCThreshold>::set(Some(hashes_gc_threshold));
+			<FinalizedGCThreshold>::set(Some(finalized_gc_threshold));
 			<NumConfirmations>::set(Some(num_confirmations));
 			<TrustedSigner<T>>::set(trusted_signer);
 
@@ -204,6 +242,122 @@ decl_module! {
 				parent_hash: header.parent_hash,
 				number: header.number,
 			});
+		}
+
+		/// Add the block header to the client.
+		/// `block_header` -- RLP-encoded Ethereum header;
+		/// `dag_nodes` -- dag nodes with their merkle proofs.
+		#[weight = 0]
+		pub fn add_block_header(
+			origin,
+			block_header: Vec<u8>,
+			dag_nodes: Vec<DoubleNodeWithMerkleProof>
+		) {
+			let _signer = ensure_signed(origin)?;
+			let header: ethereum::Header = rlp::decode(block_header.as_slice()).unwrap();
+
+			// if let Some(trusted_signer) = Self::trusted_signer() {
+			// 	ensure!(
+			// 		_signer == trusted_signer,
+			// 		"Eth-client is deployed as trust mode, only trusted_signer can add a new header"
+			// 	);
+			// } else {
+			// 	let prev = Self::headers(header.parent_hash)
+			// 		.expect("Parent header should be present to add a new header");
+			// 	// ensure!(
+			// 	// 	Self::verify_header(&header, &prev, &dag_nodes),
+			// 	// 	"The header is not valid"
+			// 	// );
+			// }
+
+			let finalized_gc_threshold = match Self::finalized_gc_threshold() {
+				Some(t) => t,
+				None => U256::zero(),
+			};
+
+			let hashes_gc_threshold = match Self::hashes_gc_threshold() {
+				Some(t) => t,
+				None => U256::zero(),
+			};
+
+			if let Some(best_info) = Self::infos(Self::best_header_hash()) {
+				let header_hash = header.hash();
+				let header_number = header.number;
+				if header_number + finalized_gc_threshold < best_info.number {
+					panic!("Header is too old to have a chance to appear on the canonical chain.");
+				}
+
+				if let Some(parent_info) = Self::infos(header.parent_hash) {
+					// Record this header in `all_hashes`.
+					let mut all_hashes = Self::all_header_hashes(header_number);
+					ensure!(
+						all_hashes.iter().any(|x| x == &header_hash),
+						"Header is already known.",
+					);
+					all_hashes.push(header_hash);
+					<AllHeaderHashes>::insert(header_number, all_hashes);
+
+					// Record full information about this header.
+					<Headers>::insert(header_hash, header);
+					let info = HeaderInfo {
+						total_difficulty: parent_info.total_difficulty + header.difficulty,
+						parent_hash: header.parent_hash.clone(),
+						number: header_number,
+					};
+					<Infos>::insert(header_hash, info);
+
+					// Check if canonical chain needs to be updated.
+					if info.total_difficulty > best_info.total_difficulty
+						|| (info.total_difficulty == best_info.total_difficulty
+							&& header.difficulty % 2 == U256::default())
+					{
+						// If the new header has a lower number than the previous header, we need to clean it
+						// going forward.
+						if best_info.number > info.number {
+							let mut num = info.number + U256::one();
+							loop {
+								if num == best_info.number {
+									break;
+								}
+
+								<CanonicalHeaderHashes>::remove(num);
+								num += U256::one();
+							}
+						}
+						// Replacing the global best header hash.
+						<BestHeaderHash>::set(header_hash);
+						<CanonicalHeaderHashes>::insert(header_number, header_hash);
+
+						// Replacing past hashes until we converge into the same parent.
+						// Starting from the parent hash.
+						let mut number = header.number - 1;
+						let mut current_hash = info.parent_hash;
+						loop {
+							if let Some(prev_value) = Self::canonical_header_hashes(number) {
+								<CanonicalHeaderHashes>::insert(number, current_hash);
+								// If the current block hash is 0 (unlikely), or the previous hash matches the
+								// current hash, then the chains converged and we can stop now.
+								if number == U256::zero() || prev_value == current_hash {
+									break;
+								}
+								// Check if there is an info to get the parent hash
+								if let Some(info) = Self::infos(current_hash) {
+									current_hash = info.parent_hash;
+								} else {
+									break;
+								}
+								number -= U256::one();
+							}
+						}
+						if header_number >= hashes_gc_threshold {
+							Self::gc_canonical_chain(header_number - hashes_gc_threshold);
+						}
+						if header_number >= finalized_gc_threshold {
+							Self::gc_headers(header_number - finalized_gc_threshold);
+						}
+					}
+				}
+			}
 		}
 
 		/// Offchain Worker entry point.
@@ -249,54 +403,90 @@ fn hex_to_bytes(v: &[char]) -> Result<Vec<u8>, hex::FromHexError> {
 }
 
 impl<T: Trait> Module<T> {
-    pub fn initialized() -> bool {
+	pub fn initialized() -> bool {
 		Self::dags_start_epoch().is_some()
-    }
+	}
 
-    pub fn dag_merkle_root(epoch: u64) -> H128 {
-    	match Self::dags_start_epoch() {
-    		Some(ep) => Self::dags_merkle_roots()[(epoch - ep) as usize],
-    		None => H128::zero(),
-    	}
-    	
-    }
+	pub fn dag_merkle_root(epoch: u64) -> H128 {
+		match Self::dags_start_epoch() {
+			Some(ep) => Self::dags_merkle_roots()[(epoch - ep) as usize],
+			None => H128::zero(),
+		}
+		
+	}
 
-    pub fn last_block_number() -> U256 {
-    	match Self::infos(Self::best_header_hash()) {
-    		Some(header) => header.number,
-    		None => U256::zero(),
-    	}
-    }
+	pub fn last_block_number() -> U256 {
+		match Self::infos(Self::best_header_hash()) {
+			Some(header) => header.number,
+			None => U256::zero(),
+		}
+	}
 
-    /// Returns the block hash from the canonical chain.
-    pub fn block_hash(index: u64) -> Option<H256> {
-    	Some(Self::canonical_header_hashes(U256::from(index)))
-    }
+	/// Returns the block hash from the canonical chain.
+	pub fn block_hash(index: u64) -> Option<H256> {
+		Self::canonical_header_hashes(U256::from(index))
+	}
 
-    /// Returns all hashes known for that height.
-    pub fn known_hashes(index: u64) -> Vec<H256> {
-    	Self::all_header_hashes(U256::from(index))
-    }
+	/// Returns all hashes known for that height.
+	pub fn known_hashes(index: u64) -> Vec<H256> {
+		Self::all_header_hashes(U256::from(index))
+	}
 
-    /// Returns block hash and the number of confirmations.
-    pub fn block_hash_safe(index: u64) -> Option<H256> {
-    	let confirmations = match Self::num_confirmations() {
-    		Some(c) => c,
-    		None => panic!("No confirmations"),
-    	};
+	/// Returns block hash and the number of confirmations.
+	pub fn block_hash_safe(index: u64) -> Option<H256> {
+		let confirmations = match Self::num_confirmations() {
+			Some(c) => c,
+			None => panic!("No confirmations"),
+		};
 
-        match Self::block_hash(index) {
-        	Some(header_hash) => {
-		        let last_block_number = Self::last_block_number();
-		        if U256::from(index) + confirmations > last_block_number {
-		            None
-		        } else {
-		            Some(header_hash)
-		        }
-        	},
-        	None => None,
-        }
-    }
+		match Self::block_hash(index) {
+			Some(header_hash) => {
+				let last_block_number = Self::last_block_number();
+				if U256::from(index) + confirmations > last_block_number {
+					None
+				} else {
+					Some(header_hash)
+				}
+			},
+			None => None,
+		}
+	}
+
+	/// Remove hashes from the canonical chain that are at least as old as the given header number.
+	fn gc_canonical_chain(mut header_number: U256) {
+		loop {
+			if Self::canonical_header_hashes(header_number).is_some() {
+				<CanonicalHeaderHashes>::remove(header_number);
+				if header_number == U256::zero() {
+					break;
+				} else {
+					header_number -= U256::one();
+				}
+			} else {
+				break;
+			}
+		}
+	}
+
+	/// Remove information about the headers that are at least as old as the given header number.
+	fn gc_headers(mut header_number: U256) {
+		loop {
+			if let all_headers = Self::all_header_hashes(header_number) {
+				for hash in all_headers {
+					<Headers>::remove(hash);
+					<Infos>::remove(hash);
+				}
+				<AllHeaderHashes>::remove(header_number);
+				if header_number == U256::zero() {
+					break;
+				} else {
+					header_number -= U256::one();
+				}
+			} else {
+				break;
+			}
+		}
+	}
 
 	fn fetch_block() -> Result<u32, http::Error> {
 		// Make a post request to an eth chain
