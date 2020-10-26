@@ -106,9 +106,9 @@ pub struct HeaderInfo {
 decl_storage! {
 	trait Store for Module<T: Trait> as WorkerModule {
 		/// The epoch from which the DAG merkle roots start.
-		pub DAGsStartEpoch get(fn dags_start_epoch): Option<T::Threshold>;
+		pub DAGsStartEpoch get(fn dags_start_epoch): Option<u64>;
 		/// DAG merkle roots for the next several years.
-		pub DAGsMerkleRoots get(fn dags_merkle_roots): Vec<H256>;
+		pub DAGsMerkleRoots get(fn dags_merkle_roots): Vec<H128>;
 		/// Hash of the header that has the highest cumulative difficulty. The current head of the
 		/// canonical chain.
 		pub BestHeaderHash get(fn best_header_hash): H256;
@@ -159,7 +159,7 @@ decl_module! {
 		#[weight = 0]
 		fn init(
 			origin,
-			dags_start_epoch: T::Threshold,
+			dags_start_epoch: u64,
 			dags_merkle_roots: Vec<H128>,
 			first_header: Vec<u8>,
 			hashes_gc_threshold: T::Threshold,
@@ -172,7 +172,8 @@ decl_module! {
 			ensure!(Self::hashes_gc_threshold().is_none(), "Already initialized");
 			ensure!(Self::finalized_gc_threshold().is_none(), "Already initialized");
 
-			<DAGsStartEpoch<T>>::set(Some(dags_start_epoch));
+			<DAGsStartEpoch>::set(Some(dags_start_epoch));
+			<DAGsMerkleRoots>::set(dags_merkle_roots);
 			<HashesGCThreshold<T>>::set(Some(hashes_gc_threshold));
 			<FinalizedGCThreshold<T>>::set(Some(finalized_gc_threshold));
 			<NumConfirmations<T>>::set(Some(num_confirmations));
@@ -182,6 +183,7 @@ decl_module! {
 			let header_hash = header.hash();
 			let header_number = header.number;
 
+			<BestHeaderHash>::set(header_hash.clone());
 			<AllHeaderHashes>::insert(header_number, vec![header_hash]);
 			<CanonicalHeaderHashes>::insert(header_number, header_hash);
 			<Headers>::insert(header_hash, header.clone());
@@ -225,6 +227,46 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
+    pub fn initialized() -> bool {
+		Self::dags_start_epoch().is_some()
+    }
+
+    pub fn dag_merkle_root(epoch: u64) -> H128 {
+    	match Self::dags_start_epoch() {
+    		Some(ep) => Self::dags_merkle_roots()[(epoch - ep) as usize],
+    		None => H128::zero(),
+    	}
+    	
+    }
+
+    pub fn last_block_number(&self) -> U256 {
+    	match Self::infos(Self::best_header_hash()) {
+    		Some(header) => header.number,
+    		None => U256::zero(),
+    	}
+    }
+
+    // /// Returns the block hash from the canonical chain.
+    // pub fn block_hash(index: u64) -> Option<H256> {
+    //     self.canonical_header_hashes.get(&index)
+    // }
+
+    // /// Returns all hashes known for that height.
+    // pub fn known_hashes(index: u64) -> Vec<H256> {
+    //     self.all_header_hashes.get(&index).unwrap_or_default()
+    // }
+
+    // /// Returns block hash and the number of confirmations.
+    // pub fn block_hash_safe(&self, #[serializer(borsh)] index: u64) -> Option<H256> {
+    //     let header_hash = self.block_hash(index)?;
+    //     let last_block_number = self.last_block_number();
+    //     if index + self.num_confirmations > last_block_number {
+    //         None
+    //     } else {
+    //         Some(header_hash)
+    //     }
+    // }
+
 	fn fetch_block() -> Result<u32, http::Error> {
 		// Make a post request to an eth chain
 		let body = br#"{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest", false],"id":1}"#;
