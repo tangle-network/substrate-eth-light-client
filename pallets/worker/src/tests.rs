@@ -103,6 +103,7 @@ impl Trait for Test {
 	type GracePeriod = GracePeriod;
 	type UnsignedInterval = UnsignedInterval;
 	type UnsignedPriority = UnsignedPriority;
+	type Threshold = u64;
 }
 
 type Example = Module<Test>;
