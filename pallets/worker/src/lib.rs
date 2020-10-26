@@ -1,7 +1,12 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+use codec::Codec;
 use frame_support::Parameter;
-use sp_runtime::traits::AtLeast32Bit;
+use sp_runtime::traits::{
+	AtLeast32BitUnsigned, Member,
+	MaybeSerializeDeserialize,
+};
+use sp_std::{fmt::Debug};
 use sp_std::prelude::*;
 use codec::{Encode, Decode};
 use frame_system::{
@@ -92,7 +97,7 @@ pub trait Trait: CreateSignedTransaction<Call<Self>> {
 	/// multiple pallets send unsigned transactions.
 	type UnsignedPriority: Get<TransactionPriority>;
 	/// Threshold type for storage items
-	type Threshold: Parameter + AtLeast32Bit + Default + Copy;
+	type Threshold: Parameter + Member + AtLeast32BitUnsigned + Codec + Default + Copy + MaybeSerializeDeserialize + Debug;
 }
 
 /// Minimal information about a header.
@@ -101,6 +106,11 @@ pub struct HeaderInfo {
 	pub total_difficulty: U256,
 	pub parent_hash: H256,
 	pub number: U256,
+}
+
+#[derive(Encode, Decode)]
+pub struct RpcUrl {
+	url: Vec<u8>,
 }
 
 decl_storage! {
@@ -123,7 +133,7 @@ decl_storage! {
 		pub FinalizedGCThreshold get(fn finalized_gc_threshold): Option<T::Threshold>;
 		/// Number of confirmations that applications can use to consider the transaction safe.
 		/// For most use cases 25 should be enough, for super safe cases it should be 500.
-		pub NumConfirmations get(fn num_confirmations): Option<T::Threshold>;
+		pub NumConfirmations get(fn num_confirmations): Option<U256>;
 		/// Hashes of the canonical chain mapped to their numbers. Stores up to `hashes_gc_threshold`
 		/// entries.
 		/// header number -> header hash
@@ -139,6 +149,8 @@ decl_storage! {
 		/// If set, block header added by trusted signer will skip validation and added by
 		/// others will be immediately rejected, used in PoA testnets
 		pub TrustedSigner get(fn trusted_signer): Option<T::AccountId>;
+		/// RpcUrls set by anyone (intended for offchain workers themselves)
+		pub RpcUrls get(fn rpc_urls): map hasher(twox_64_concat) T::AccountId => Option<RpcUrl>;
 	}
 }
 
@@ -164,7 +176,7 @@ decl_module! {
 			first_header: Vec<u8>,
 			hashes_gc_threshold: T::Threshold,
 			finalized_gc_threshold: T::Threshold,
-			num_confirmations: T::Threshold,
+			num_confirmations: U256,
 			trusted_signer: Option<T::AccountId>,
 		) {
 			let _signer = ensure_signed(origin)?;
@@ -176,7 +188,7 @@ decl_module! {
 			<DAGsMerkleRoots>::set(dags_merkle_roots);
 			<HashesGCThreshold<T>>::set(Some(hashes_gc_threshold));
 			<FinalizedGCThreshold<T>>::set(Some(finalized_gc_threshold));
-			<NumConfirmations<T>>::set(Some(num_confirmations));
+			<NumConfirmations>::set(Some(num_confirmations));
 			<TrustedSigner<T>>::set(trusted_signer);
 
 			let header: ethereum::Header = rlp::decode(first_header.as_slice()).unwrap();
@@ -239,33 +251,42 @@ impl<T: Trait> Module<T> {
     	
     }
 
-    pub fn last_block_number(&self) -> U256 {
+    pub fn last_block_number() -> U256 {
     	match Self::infos(Self::best_header_hash()) {
     		Some(header) => header.number,
     		None => U256::zero(),
     	}
     }
 
-    // /// Returns the block hash from the canonical chain.
-    // pub fn block_hash(index: u64) -> Option<H256> {
-    //     self.canonical_header_hashes.get(&index)
-    // }
+    /// Returns the block hash from the canonical chain.
+    pub fn block_hash(index: u64) -> Option<H256> {
+    	Some(Self::canonical_header_hashes(U256::from(index)))
+    }
 
-    // /// Returns all hashes known for that height.
-    // pub fn known_hashes(index: u64) -> Vec<H256> {
-    //     self.all_header_hashes.get(&index).unwrap_or_default()
-    // }
+    /// Returns all hashes known for that height.
+    pub fn known_hashes(index: u64) -> Vec<H256> {
+    	Self::all_header_hashes(U256::from(index))
+    }
 
-    // /// Returns block hash and the number of confirmations.
-    // pub fn block_hash_safe(&self, #[serializer(borsh)] index: u64) -> Option<H256> {
-    //     let header_hash = self.block_hash(index)?;
-    //     let last_block_number = self.last_block_number();
-    //     if index + self.num_confirmations > last_block_number {
-    //         None
-    //     } else {
-    //         Some(header_hash)
-    //     }
-    // }
+    /// Returns block hash and the number of confirmations.
+    pub fn block_hash_safe(index: u64) -> Option<H256> {
+    	let confirmations = match Self::num_confirmations() {
+    		Some(c) => c,
+    		None => panic!("No confirmations"),
+    	};
+
+        match Self::block_hash(index) {
+        	Some(header_hash) => {
+		        let last_block_number = Self::last_block_number();
+		        if U256::from(index) + confirmations > last_block_number {
+		            None
+		        } else {
+		            Some(header_hash)
+		        }
+        	},
+        	None => None,
+        }
+    }
 
 	fn fetch_block() -> Result<u32, http::Error> {
 		// Make a post request to an eth chain

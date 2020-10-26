@@ -3859,6 +3859,7 @@ dependencies = [
  "serde_derive",
  "sha3 0.8.2",
  "sp-application-crypto",
+ "sp-arithmetic",
  "sp-core",
  "sp-io",
  "sp-runtime",

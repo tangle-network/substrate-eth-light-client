@@ -18,6 +18,7 @@ serde = { version = "1.0", default-features = false, optional = true }
 serde_derive = { version = "1.0", optional = true }
 safe-mix = { version = "1.0", default-features = false }
 sp-application-crypto = { git = "https://github.com/paritytech/substrate.git", default-features = false }
+sp-arithmetic = { git = "https://github.com/paritytech/substrate.git", default-features = false }
 sp-std = { git = "https://github.com/paritytech/substrate.git", default-features = false }
 sp-io = { git = "https://github.com/paritytech/substrate.git", default-features = false }
 sp-core = { git = "https://github.com/paritytech/substrate.git", default-features = false }
@@ -39,6 +40,7 @@ std = [
 	"safe-mix/std",
 	"codec/std",
 	"sp-application-crypto/std",
+	"sp-arithmetic/std",
 	"sp-std/std",
 	"sp-runtime/std",
 	"frame-support/std",
