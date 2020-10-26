@@ -101,7 +101,7 @@ pub trait Trait: CreateSignedTransaction<Call<Self>> {
 }
 
 /// Minimal information about a header.
-#[derive(Encode, Decode)]
+#[derive(Clone, Encode, Decode)]
 pub struct HeaderInfo {
 	pub total_difficulty: U256,
 	pub parent_hash: H256,
@@ -113,7 +113,7 @@ pub struct RpcUrl {
 	url: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Clone, Encode, Decode)]
 pub struct DoubleNodeWithMerkleProof {
 	pub dag_nodes: Vec<H512>,
 	pub proof: Vec<H128>,
@@ -275,7 +275,7 @@ decl_module! {
 				None => U256::zero(),
 			};
 
-			let _hashes_gc_threshold = match Self::hashes_gc_threshold() {
+			let hashes_gc_threshold = match Self::hashes_gc_threshold() {
 				Some(t) => t,
 				None => U256::zero(),
 			};
@@ -304,58 +304,58 @@ decl_module! {
 						parent_hash: header.parent_hash.clone(),
 						number: header_number,
 					};
-					<Infos>::insert(header_hash, info);
+					<Infos>::insert(header_hash, info.clone());
 
-					// // Check if canonical chain needs to be updated.
-					// if info.total_difficulty > best_info.total_difficulty
-					// 	|| (info.total_difficulty == best_info.total_difficulty
-					// 		&& header.difficulty % 2 == U256::default())
-					// {
-					// 	// If the new header has a lower number than the previous header, we need to clean it
-					// 	// going forward.
-					// 	if best_info.number > info.number {
-					// 		let mut num = info.number + U256::one();
-					// 		loop {
-					// 			if num == best_info.number {
-					// 				break;
-					// 			}
+					// Check if canonical chain needs to be updated.
+					if info.total_difficulty > best_info.total_difficulty
+						|| (info.total_difficulty == best_info.total_difficulty
+							&& header.difficulty % 2 == U256::default())
+					{
+						// If the new header has a lower number than the previous header, we need to clean it
+						// going forward.
+						if best_info.number > info.number {
+							let mut num = info.number + U256::one();
+							loop {
+								if num == best_info.number {
+									break;
+								}
 
-					// 			<CanonicalHeaderHashes>::remove(num);
-					// 			num += U256::one();
-					// 		}
-					// 	}
-					// 	// Replacing the global best header hash.
-					// 	<BestHeaderHash>::set(header_hash);
-					// 	<CanonicalHeaderHashes>::insert(header_number, header_hash);
+								<CanonicalHeaderHashes>::remove(num);
+								num += U256::one();
+							}
+						}
+						// Replacing the global best header hash.
+						<BestHeaderHash>::set(header_hash);
+						<CanonicalHeaderHashes>::insert(header_number, header_hash);
 
-					// 	// Replacing past hashes until we converge into the same parent.
-					// 	// Starting from the parent hash.
-					// 	let mut number = header.number - 1;
-					// 	let mut current_hash = info.parent_hash;
-					// 	loop {
-					// 		if let Some(prev_value) = Self::canonical_header_hashes(number) {
-					// 			<CanonicalHeaderHashes>::insert(number, current_hash);
-					// 			// If the current block hash is 0 (unlikely), or the previous hash matches the
-					// 			// current hash, then the chains converged and we can stop now.
-					// 			if number == U256::zero() || prev_value == current_hash {
-					// 				break;
-					// 			}
-					// 			// Check if there is an info to get the parent hash
-					// 			if let Some(info) = Self::infos(current_hash) {
-					// 				current_hash = info.parent_hash;
-					// 			} else {
-					// 				break;
-					// 			}
-					// 			number -= U256::one();
-					// 		}
-					// 	}
-					// 	if header_number >= hashes_gc_threshold {
-					// 		Self::gc_canonical_chain(header_number - hashes_gc_threshold);
-					// 	}
-					// 	if header_number >= finalized_gc_threshold {
-					// 		Self::gc_headers(header_number - finalized_gc_threshold);
-					// 	}
-					// }
+						// Replacing past hashes until we converge into the same parent.
+						// Starting from the parent hash.
+						let mut number = header.number - 1;
+						let mut current_hash = info.clone().parent_hash;
+						loop {
+							if let Some(prev_value) = Self::canonical_header_hashes(number) {
+								<CanonicalHeaderHashes>::insert(number, current_hash);
+								// If the current block hash is 0 (unlikely), or the previous hash matches the
+								// current hash, then the chains converged and we can stop now.
+								if number == U256::zero() || prev_value == current_hash {
+									break;
+								}
+								// Check if there is an info to get the parent hash
+								if let Some(info) = Self::infos(current_hash) {
+									current_hash = info.parent_hash;
+								} else {
+									break;
+								}
+								number -= U256::one();
+							}
+						}
+						if header_number >= hashes_gc_threshold {
+							Self::gc_canonical_chain(header_number - hashes_gc_threshold);
+						}
+						if header_number >= finalized_gc_threshold {
+							Self::gc_headers(header_number - finalized_gc_threshold);
+						}
+					}
 				}
 			}
 		}
