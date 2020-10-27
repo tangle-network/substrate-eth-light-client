@@ -1,6 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-
+use tiny_keccak::{Keccak, Hasher};
 use codec::Codec;
 use frame_support::Parameter;
 use sp_runtime::traits::{
@@ -30,7 +30,7 @@ use sp_runtime::{
 };
 use lite_json::json::JsonValue;
 use sp_io::hashing::{sha2_256};
-use ethereum_types::{H128, U256};
+use ethereum_types::{H64, H128, U256};
 use sp_core::{H256, H512};
 
 // pub mod eth;
@@ -151,8 +151,18 @@ impl DoubleNodeWithMerkleProof {
 	}
 }
 
+/// Convert across boundary. `f(x) = 2 ^ 256 / x`.
+pub fn cross_boundary(val: U256) -> U256 {
+    if val <= U256::one() {
+        U256::max_value()
+    } else {
+        ((U256::one() << 255) / val) << 1
+    }
+}
+
 decl_storage! {
 	trait Store for Module<T: Trait> as WorkerModule {
+		pub ValidateETHash get(fn validate_ethash): bool;
 		/// The epoch from which the DAG merkle roots start.
 		pub DAGsStartEpoch get(fn dags_start_epoch): Option<u64>;
 		/// DAG merkle roots for the next several years.
@@ -222,6 +232,7 @@ decl_module! {
 			ensure!(Self::hashes_gc_threshold().is_none(), "Already initialized");
 			ensure!(Self::finalized_gc_threshold().is_none(), "Already initialized");
 
+			<ValidateETHash>::set(true);
 			<DAGsStartEpoch>::set(Some(dags_start_epoch));
 			<DAGsMerkleRoots>::set(dags_merkle_roots);
 			<HashesGCThreshold>::set(Some(hashes_gc_threshold));
@@ -256,19 +267,19 @@ decl_module! {
 			let _signer = ensure_signed(origin)?;
 			let header: ethereum::Header = rlp::decode(block_header.as_slice()).unwrap();
 
-			// if let Some(trusted_signer) = Self::trusted_signer() {
-			// 	ensure!(
-			// 		_signer == trusted_signer,
-			// 		"Eth-client is deployed as trust mode, only trusted_signer can add a new header"
-			// 	);
-			// } else {
-			// 	let prev = Self::headers(header.parent_hash)
-			// 		.expect("Parent header should be present to add a new header");
-			// 	// ensure!(
-			// 	// 	Self::verify_header(&header, &prev, &dag_nodes),
-			// 	// 	"The header is not valid"
-			// 	// );
-			// }
+			if let Some(trusted_signer) = Self::trusted_signer() {
+				ensure!(
+					_signer == trusted_signer,
+					"Eth-client is deployed as trust mode, only trusted_signer can add a new header"
+				);
+			} else {
+				let prev = Self::headers(header.parent_hash)
+					.expect("Parent header should be present to add a new header");
+				ensure!(
+					Self::verify_header(header.clone(), prev.clone(), dag_nodes),
+					"The header is not valid"
+				);
+			}
 
 			let finalized_gc_threshold = match Self::finalized_gc_threshold() {
 				Some(t) => t,
@@ -471,22 +482,145 @@ impl<T: Trait> Module<T> {
 	/// Remove information about the headers that are at least as old as the given header number.
 	fn gc_headers(mut header_number: U256) {
 		loop {
-			if let all_headers = Self::all_header_hashes(header_number) {
-				for hash in all_headers {
-					<Headers>::remove(hash);
-					<Infos>::remove(hash);
-				}
-				<AllHeaderHashes>::remove(header_number);
-				if header_number == U256::zero() {
-					break;
-				} else {
-					header_number -= U256::one();
-				}
-			} else {
+			let all_headers = Self::all_header_hashes(header_number);
+			if all_headers.is_empty() { break; }
+			for hash in all_headers {
+				<Headers>::remove(hash);
+				<Infos>::remove(hash);
+			}
+			<AllHeaderHashes>::remove(header_number);
+			if header_number == U256::zero() {
 				break;
+			} else {
+				header_number -= U256::one();
 			}
 		}
 	}
+
+	fn truncate_to_h128(arr: H256) -> H128 {
+		let mut data = [0u8; 16];
+		data.copy_from_slice(&(arr.0)[16..]);
+		H128(data.into())
+	}
+
+	fn hash_h128(l: H128, r: H128) -> H128 {
+		let mut data = [0u8; 64];
+		data[16..32].copy_from_slice(&(l.0));
+		data[48..64].copy_from_slice(&(r.0));
+		Self::truncate_to_h128(sha2_256(&data).into())
+	}
+
+	pub fn apply_merkle_proof(index: u64, dag_nodes: Vec<H512>, proof: Vec<H128>) -> H128 {
+		let mut data = [0u8; 128];
+		data[..64].copy_from_slice(&(dag_nodes[0].0));
+		data[64..].copy_from_slice(&(dag_nodes[1].0));
+
+		let mut leaf = Self::truncate_to_h128(sha2_256(&data).into());
+
+		for i in 0..proof.len() {
+			if (index >> i as u64) % 2 == 0 {
+				leaf = Self::hash_h128(leaf, proof[i]);
+			} else {
+				leaf = Self::hash_h128(proof[i], leaf);
+			}
+		}
+		leaf
+	}
+
+    /// Verify PoW of the header.
+    fn verify_header(
+        header: ethereum::Header,
+        prev: ethereum::Header,
+        dag_nodes: Vec<(Vec<H512>, Vec<H128>)>
+    ) -> bool {
+        let (_mix_hash, result) = Self::hashimoto_merkle(
+            header.hash(),
+            header.nonce,
+            header.number,
+            &dag_nodes,
+        );
+        let five_thousand = match U256::from_dec_str("5000") {
+        	Ok(r) => r,
+        	Err(_) => panic!("Invalid decimal conversion"),
+        };
+        //
+        // See YellowPaper formula (50) in section 4.3.4
+        // 1. Simplified difficulty check to conform adjusting difficulty bomb
+        // 2. Added condition: header.parent_hash() == prev.hash()
+        //
+        U256::from_big_endian(&result.0) < cross_boundary(header.difficulty)
+            && (!Self::validate_ethash()
+                || (header.difficulty < header.difficulty * 101 / 100
+                    && header.difficulty > header.difficulty * 99 / 100))
+            && header.gas_used <= header.gas_limit
+            && header.gas_limit < prev.gas_limit * 1025 / 1024
+            && header.gas_limit > prev.gas_limit * 1023 / 1024
+            && header.gas_limit >= five_thousand
+            && header.timestamp > prev.timestamp
+            && header.number == prev.number + 1
+            && header.parent_hash == prev.hash()
+            && header.extra_data.0.len() <= 32
+    }
+
+    /// Verify merkle paths to the DAG nodes.
+    fn hashimoto_merkle(
+        header_hash: H256,
+        nonce: H64,
+        header_number: U256,
+        nodes: &[(Vec<H512>, Vec<H128>)],
+    ) -> (H256, H256) {
+        // Boxed index since ethash::hashimoto gets Fn, but not FnMut
+        let index = std::cell::RefCell::new(0);
+
+        // Reuse single Merkle root across all the proofs
+        let merkle_root = Self::dag_merkle_root((header_number.as_usize() / 30000) as u64);
+
+        let pair = ethash::hashimoto_with_hasher(
+            header_hash.0.into(),
+            nonce.0.into(),
+            ethash::get_full_size(header_number.as_usize() / 30000),
+            |offset| {
+                let idx = *index.borrow_mut();
+                *index.borrow_mut() += 1;
+
+                // Each two nodes are packed into single 128 bytes with Merkle proof
+                let node = &nodes[idx / 2];
+                if idx % 2 == 0 && Self::validate_ethash() {
+                    // Divide by 2 to adjust offset for 64-byte words instead of 128-byte
+                    assert_eq!(
+                    	merkle_root,
+                    	Self::apply_merkle_proof(
+                    		(offset / 2) as u64,
+                    		node.0.clone(),
+                    		node.1.clone()
+                    	)
+                    );
+                };
+
+                // Reverse each 32 bytes for ETHASH compatibility
+                let mut data = node.0[idx % 2].0;
+                data[..32].reverse();
+                data[32..].reverse();
+                data.into()
+            },
+	        |data| {
+				let mut keccak = Keccak::v256();
+				keccak.update(data);
+				let mut output = [0u8; 32];
+				keccak.finalize(&mut output);
+				output
+	        },
+	        |data| {
+		        let mut keccak = tiny_keccak::Keccak::v512();
+				keccak.update(data);
+				let mut output = [0u8; 64];
+				keccak.finalize(&mut output);
+				output
+	        }
+        );
+
+        (H256(pair.0.into()), H256(pair.1.into()))
+    }
 
 	fn fetch_block() -> Result<u32, http::Error> {
 		// Make a post request to an eth chain
