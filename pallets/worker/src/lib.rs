@@ -153,11 +153,11 @@ impl DoubleNodeWithMerkleProof {
 
 /// Convert across boundary. `f(x) = 2 ^ 256 / x`.
 pub fn cross_boundary(val: U256) -> U256 {
-    if val <= U256::one() {
-        U256::max_value()
-    } else {
-        ((U256::one() << 255) / val) << 1
-    }
+	if val <= U256::one() {
+		U256::max_value()
+	} else {
+		((U256::one() << 255) / val) << 1
+	}
 }
 
 decl_storage! {
@@ -301,10 +301,10 @@ decl_module! {
 				if let Some(parent_info) = Self::infos(header.parent_hash) {
 					// Record this header in `all_hashes`.
 					let mut all_hashes = Self::all_header_hashes(header_number);
-					// ensure!(
-					// 	all_hashes.iter().any(|x| x == &header_hash),
-					// 	"Header is already known.",
-					// );
+					ensure!(
+					 all_hashes.iter().any(|x| x == &header_hash),
+					 "Header is already known.",
+					);
 					all_hashes.push(header_hash);
 					<AllHeaderHashes>::insert(header_number, all_hashes);
 
@@ -527,100 +527,100 @@ impl<T: Trait> Module<T> {
 		leaf
 	}
 
-    /// Verify PoW of the header.
-    fn verify_header(
-        header: ethereum::Header,
-        prev: ethereum::Header,
-        dag_nodes: Vec<(Vec<H512>, Vec<H128>)>
-    ) -> bool {
-        let (_mix_hash, result) = Self::hashimoto_merkle(
-            header.hash(),
-            header.nonce,
-            header.number,
-            &dag_nodes,
-        );
-        let five_thousand = match U256::from_dec_str("5000") {
-        	Ok(r) => r,
-        	Err(_) => panic!("Invalid decimal conversion"),
-        };
-        //
-        // See YellowPaper formula (50) in section 4.3.4
-        // 1. Simplified difficulty check to conform adjusting difficulty bomb
-        // 2. Added condition: header.parent_hash() == prev.hash()
-        //
-        U256::from_big_endian(&result.0) < cross_boundary(header.difficulty)
-            && (!Self::validate_ethash()
-                || (header.difficulty < header.difficulty * 101 / 100
-                    && header.difficulty > header.difficulty * 99 / 100))
-            && header.gas_used <= header.gas_limit
-            && header.gas_limit < prev.gas_limit * 1025 / 1024
-            && header.gas_limit > prev.gas_limit * 1023 / 1024
-            && header.gas_limit >= five_thousand
-            && header.timestamp > prev.timestamp
-            && header.number == prev.number + 1
-            && header.parent_hash == prev.hash()
-            && header.extra_data.0.len() <= 32
-    }
+	/// Verify PoW of the header.
+	fn verify_header(
+		header: ethereum::Header,
+		prev: ethereum::Header,
+		dag_nodes: Vec<(Vec<H512>, Vec<H128>)>
+	) -> bool {
+		let (_mix_hash, result) = Self::hashimoto_merkle(
+			header.hash(),
+			header.nonce,
+			header.number,
+			&dag_nodes,
+		);
+		let five_thousand = match U256::from_dec_str("5000") {
+			Ok(r) => r,
+			Err(_) => panic!("Invalid decimal conversion"),
+		};
+		//
+		// See YellowPaper formula (50) in section 4.3.4
+		// 1. Simplified difficulty check to conform adjusting difficulty bomb
+		// 2. Added condition: header.parent_hash() == prev.hash()
+		//
+		U256::from_big_endian(&result.0) < cross_boundary(header.difficulty)
+			&& (!Self::validate_ethash()
+				|| (header.difficulty < header.difficulty * 101 / 100
+					&& header.difficulty > header.difficulty * 99 / 100))
+			&& header.gas_used <= header.gas_limit
+			&& header.gas_limit < prev.gas_limit * 1025 / 1024
+			&& header.gas_limit > prev.gas_limit * 1023 / 1024
+			&& header.gas_limit >= five_thousand
+			&& header.timestamp > prev.timestamp
+			&& header.number == prev.number + 1
+			&& header.parent_hash == prev.hash()
+			&& header.extra_data.0.len() <= 32
+	}
 
-    /// Verify merkle paths to the DAG nodes.
-    fn hashimoto_merkle(
-        header_hash: H256,
-        nonce: H64,
-        header_number: U256,
-        nodes: &[(Vec<H512>, Vec<H128>)],
-    ) -> (H256, H256) {
-        // Boxed index since ethash::hashimoto gets Fn, but not FnMut
-        let index = std::cell::RefCell::new(0);
+	/// Verify merkle paths to the DAG nodes.
+	fn hashimoto_merkle(
+		header_hash: H256,
+		nonce: H64,
+		header_number: U256,
+		nodes: &[(Vec<H512>, Vec<H128>)],
+	) -> (H256, H256) {
+		// Boxed index since ethash::hashimoto gets Fn, but not FnMut
+		let index = std::cell::RefCell::new(0);
 
-        // Reuse single Merkle root across all the proofs
-        let merkle_root = Self::dag_merkle_root((header_number.as_usize() / 30000) as u64);
+		// Reuse single Merkle root across all the proofs
+		let merkle_root = Self::dag_merkle_root((header_number.as_usize() / 30000) as u64);
 
-        let pair = ethash::hashimoto_with_hasher(
-            header_hash.0.into(),
-            nonce.0.into(),
-            ethash::get_full_size(header_number.as_usize() / 30000),
-            |offset| {
-                let idx = *index.borrow_mut();
-                *index.borrow_mut() += 1;
+		let pair = ethash::hashimoto_with_hasher(
+			header_hash.0.into(),
+			nonce.0.into(),
+			ethash::get_full_size(header_number.as_usize() / 30000),
+			|offset| {
+				let idx = *index.borrow_mut();
+				*index.borrow_mut() += 1;
 
-                // Each two nodes are packed into single 128 bytes with Merkle proof
-                let node = &nodes[idx / 2];
-                if idx % 2 == 0 && Self::validate_ethash() {
-                    // Divide by 2 to adjust offset for 64-byte words instead of 128-byte
-                    assert_eq!(
-                    	merkle_root,
-                    	Self::apply_merkle_proof(
-                    		(offset / 2) as u64,
-                    		node.0.clone(),
-                    		node.1.clone()
-                    	)
-                    );
-                };
+				// Each two nodes are packed into single 128 bytes with Merkle proof
+				let node = &nodes[idx / 2];
+				if idx % 2 == 0 && Self::validate_ethash() {
+					// Divide by 2 to adjust offset for 64-byte words instead of 128-byte
+					assert_eq!(
+						merkle_root,
+						Self::apply_merkle_proof(
+							(offset / 2) as u64,
+							node.0.clone(),
+							node.1.clone()
+						)
+					);
+				};
 
-                // Reverse each 32 bytes for ETHASH compatibility
-                let mut data = node.0[idx % 2].0;
-                data[..32].reverse();
-                data[32..].reverse();
-                data.into()
-            },
-	        |data| {
+				// Reverse each 32 bytes for ETHASH compatibility
+				let mut data = node.0[idx % 2].0;
+				data[..32].reverse();
+				data[32..].reverse();
+				data.into()
+			},
+			|data| {
 				let mut keccak = Keccak::v256();
 				keccak.update(data);
 				let mut output = [0u8; 32];
 				keccak.finalize(&mut output);
 				output
-	        },
-	        |data| {
-		        let mut keccak = tiny_keccak::Keccak::v512();
+			},
+			|data| {
+				let mut keccak = tiny_keccak::Keccak::v512();
 				keccak.update(data);
 				let mut output = [0u8; 64];
 				keccak.finalize(&mut output);
 				output
-	        }
-        );
+			}
+		);
 
-        (H256(pair.0.into()), H256(pair.1.into()))
-    }
+		(H256(pair.0.into()), H256(pair.1.into()))
+	}
 
 	fn fetch_block() -> Result<u32, http::Error> {
 		// Make a post request to an eth chain
