@@ -1,13 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use tiny_keccak::{Keccak, Hasher};
-use codec::Codec;
-use frame_support::Parameter;
-use sp_runtime::traits::{
-	AtLeast32BitUnsigned, Member,
-	MaybeSerializeDeserialize,
-};
-use sp_std::{fmt::Debug};
 use sp_std::prelude::*;
 use codec::{Encode, Decode};
 use frame_system::{
@@ -28,10 +20,10 @@ use sp_runtime::{
 	},
 	offchain::{http},
 };
+use tiny_keccak::{Keccak, Hasher};
 use lite_json::json::JsonValue;
 use sp_io::hashing::{sha2_256};
-use ethereum_types::{H64, H128, U256};
-use sp_core::{H256, H512};
+use ethereum_types::{H64, H128, U256, H256, H512};
 
 // pub mod eth;
 
@@ -96,8 +88,6 @@ pub trait Trait: CreateSignedTransaction<Call<Self>> {
 	/// This is exposed so that it can be tuned for particular runtime, when
 	/// multiple pallets send unsigned transactions.
 	type UnsignedPriority: Get<TransactionPriority>;
-	/// Threshold type for storage items
-	type Threshold: Parameter + Member + AtLeast32BitUnsigned + Codec + Default + Copy + MaybeSerializeDeserialize + Debug;
 }
 
 /// Minimal information about a header.
@@ -199,6 +189,8 @@ decl_storage! {
 		pub TrustedSigner get(fn trusted_signer): Option<T::AccountId>;
 		/// RpcUrls set by anyone (intended for offchain workers themselves)
 		pub RpcUrls get(fn rpc_urls): map hasher(twox_64_concat) T::AccountId => Option<RpcUrl>;
+		/// Verification index for hashimoto scheme
+		pub VerificationIndex get(fn verification_index): u32;
 	}
 }
 
@@ -559,7 +551,7 @@ impl<T: Trait> Module<T> {
 			&& header.timestamp > prev.timestamp
 			&& header.number == prev.number + 1
 			&& header.parent_hash == prev.hash()
-			&& header.extra_data.0.len() <= 32
+			&& header.extra_data.len() <= 32
 	}
 
 	/// Verify merkle paths to the DAG nodes.
@@ -571,7 +563,7 @@ impl<T: Trait> Module<T> {
 	) -> (H256, H256) {
 		// Boxed index since ethash::hashimoto gets Fn, but not FnMut
 		// TODO: Remove this std dependency
-		let index = std::cell::RefCell::new(0);
+		<VerificationIndex>::set(0);
 
 		// Reuse single Merkle root across all the proofs
 		let merkle_root = Self::dag_merkle_root((header_number.as_usize() / 30000) as u64);
@@ -582,12 +574,12 @@ impl<T: Trait> Module<T> {
 			ethash::get_full_size(header_number.as_usize() / 30000),
 			|offset| {
 				// TODO: Remove this std dependency
-				let idx = *index.borrow_mut();
+				let idx = Self::verification_index() as usize;
 				// TODO: Remove this std dependency
-				*index.borrow_mut() += 1;
+				<VerificationIndex>::set(Self::verification_index() + 1);
 
 				// Each two nodes are packed into single 128 bytes with Merkle proof
-				let node = &nodes[idx / 2];
+				let node = &nodes[idx as usize / 2];
 				if idx % 2 == 0 && Self::validate_ethash() {
 					// Divide by 2 to adjust offset for 64-byte words instead of 128-byte
 					assert_eq!(

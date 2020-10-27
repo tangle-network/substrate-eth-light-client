@@ -344,7 +344,6 @@ impl pallet_worker::Trait for Runtime {
 	type GracePeriod = GracePeriod;
 	type UnsignedInterval = UnsignedInterval;
 	type UnsignedPriority = UnsignedPriority;
-	type Threshold = u64;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
