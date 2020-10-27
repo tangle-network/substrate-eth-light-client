@@ -570,6 +570,7 @@ impl<T: Trait> Module<T> {
 		nodes: &[(Vec<H512>, Vec<H128>)],
 	) -> (H256, H256) {
 		// Boxed index since ethash::hashimoto gets Fn, but not FnMut
+		// TODO: Remove this std dependency
 		let index = std::cell::RefCell::new(0);
 
 		// Reuse single Merkle root across all the proofs
@@ -580,7 +581,9 @@ impl<T: Trait> Module<T> {
 			nonce.0.into(),
 			ethash::get_full_size(header_number.as_usize() / 30000),
 			|offset| {
+				// TODO: Remove this std dependency
 				let idx = *index.borrow_mut();
+				// TODO: Remove this std dependency
 				*index.borrow_mut() += 1;
 
 				// Each two nodes are packed into single 128 bytes with Merkle proof
