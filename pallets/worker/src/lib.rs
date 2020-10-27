@@ -103,44 +103,6 @@ pub struct RpcUrl {
 	url: Vec<u8>,
 }
 
-#[derive(Clone, Encode, Decode)]
-pub struct DoubleNodeWithMerkleProof {
-	pub dag_nodes: Vec<H512>,
-	pub proof: Vec<H128>,
-}
-
-impl DoubleNodeWithMerkleProof {
-	fn truncate_to_h128(arr: H256) -> H128 {
-		let mut data = [0u8; 16];
-		data.copy_from_slice(&(arr.0)[16..]);
-		H128(data.into())
-	}
-
-	fn hash_h128(l: H128, r: H128) -> H128 {
-		let mut data = [0u8; 64];
-		data[16..32].copy_from_slice(&(l.0));
-		data[48..64].copy_from_slice(&(r.0));
-		Self::truncate_to_h128(sha2_256(&data).into())
-	}
-
-	pub fn apply_merkle_proof(&self, index: u64) -> H128 {
-		let mut data = [0u8; 128];
-		data[..64].copy_from_slice(&(self.dag_nodes[0].0));
-		data[64..].copy_from_slice(&(self.dag_nodes[1].0));
-
-		let mut leaf = Self::truncate_to_h128(sha2_256(&data).into());
-
-		for i in 0..self.proof.len() {
-			if (index >> i as u64) % 2 == 0 {
-				leaf = Self::hash_h128(leaf, self.proof[i]);
-			} else {
-				leaf = Self::hash_h128(self.proof[i], leaf);
-			}
-		}
-		leaf
-	}
-}
-
 /// Convert across boundary. `f(x) = 2 ^ 256 / x`.
 pub fn cross_boundary(val: U256) -> U256 {
 	if val <= U256::one() {
