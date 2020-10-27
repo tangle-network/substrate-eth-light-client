@@ -29,6 +29,7 @@ use ethereum_types::{H64, H128, U256, H256, H512};
 
 #[cfg(test)]
 mod tests;
+mod prover;
 
 /// Defines application identifier for crypto keys of this module.
 ///
@@ -397,7 +398,7 @@ impl<T: Trait> Module<T> {
 		Self::all_header_hashes(U256::from(index))
 	}
 
-	/// Returns block hash and the number of confirmations.
+	/// Returns block hash if it is safe.
 	pub fn block_hash_safe(index: u64) -> Option<H256> {
 		let confirmations = match Self::num_confirmations() {
 			Some(c) => c,
