@@ -2,7 +2,7 @@ use crate::*;
 use codec::{Encode, Decode};
 use frame_support::{
 	impl_outer_origin, parameter_types,
-	weights::Weight,
+	weights::Weight, assert_ok,
 };
 use sp_core::{
 	H256,
@@ -18,6 +18,16 @@ use sp_runtime::{
 		IdentifyAccount, Verify,
 	},
 };
+
+use rlp::RlpStream;
+use futures::future::join_all;
+use web3::futures::Future;
+use web3::types::Block;
+use lazy_static::lazy_static;
+use serde::{Deserialize, Deserializer};
+use std::panic;
+use sp_core::Pair;
+use hex::FromHex;
 
 impl_outer_origin! {
 	pub enum Origin for Test where system = frame_system {}
@@ -107,6 +117,128 @@ impl Trait for Test {
 
 type Example = Module<Test>;
 
+#[derive(Debug)]
+struct Hex(pub Vec<u8>);
+
+impl<'de> Deserialize<'de> for Hex {
+    fn deserialize<D>(deserializer: D) -> Result<Self, <D as Deserializer<'de>>::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut s = <String as Deserialize>::deserialize(deserializer)?;
+        if s.starts_with("0x") {
+            s = s[2..].to_string();
+        }
+        if s.len() % 2 == 1 {
+            s.insert_str(0, "0");
+        }
+        Ok(Hex(Vec::from_hex(&s).map_err(|err| {
+            serde::de::Error::custom(err.to_string())
+        })?))
+    }
+}
+
+
+#[derive(Debug, Deserialize)]
+struct RootsCollectionRaw {
+    pub dag_merkle_roots: Vec<Hex>, // H128
+}
+
+#[derive(Debug)]
+struct RootsCollection {
+    pub dag_merkle_roots: Vec<H128>,
+}
+
+impl From<RootsCollectionRaw> for RootsCollection {
+    fn from(item: RootsCollectionRaw) -> Self {
+        Self {
+            dag_merkle_roots: item
+                .dag_merkle_roots
+                .iter()
+                .map(|e| {
+                	let mut res: [u8; 16] = [0; 16];
+                	for i in 0..16 {
+                		res[i] = e.0[i];
+                	}
+                	H128::from(res)
+                })
+                .collect(),
+        }
+    }
+}
+fn catch_unwind_silent<F: FnOnce() -> R + panic::UnwindSafe, R>(f: F) -> std::thread::Result<R> {
+    let prev_hook = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+    let result = panic::catch_unwind(f);
+    panic::set_hook(prev_hook);
+    result
+}
+
+fn read_roots_collection() -> RootsCollection {
+    read_roots_collection_raw().into()
+}
+
+fn read_roots_collection_raw() -> RootsCollectionRaw {
+    serde_json::from_reader(
+        std::fs::File::open(std::path::Path::new("./src/data/dag_merkle_roots.json")).unwrap(),
+    )
+    .unwrap()
+}
+
+// Wish to avoid this code and use web3+rlp libraries directly
+fn rlp_append<TX>(header: &Block<TX>, stream: &mut RlpStream) {
+    stream.begin_list(15);
+    stream.append(&header.parent_hash);
+    stream.append(&header.uncles_hash);
+    stream.append(&header.author);
+    stream.append(&header.state_root);
+    stream.append(&header.transactions_root);
+    stream.append(&header.receipts_root);
+    stream.append(&header.logs_bloom);
+    stream.append(&header.difficulty);
+    stream.append(&header.number.unwrap());
+    stream.append(&header.gas_limit);
+    stream.append(&header.gas_used);
+    stream.append(&header.timestamp);
+    stream.append(&header.extra_data.0);
+    stream.append(&header.mix_hash.unwrap());
+    stream.append(&header.nonce.unwrap());
+}
+
+lazy_static! {
+    static ref WEB3RS: web3::Web3<web3::transports::Http> = {
+        let (eloop, transport) = web3::transports::Http::new(
+            "https://mainnet.infura.io/v3/b5f870422ee5454fb11937e947154cd2",
+        )
+        .unwrap();
+        eloop.into_remote();
+        web3::Web3::new(transport)
+    };
+}
+
+fn get_blocks(
+    web3rust: &web3::Web3<web3::transports::Http>,
+    start: usize,
+    stop: usize,
+) -> (Vec<Vec<u8>>, Vec<H256>) {
+    let futures = (start..stop)
+        .map(|i| web3rust.eth().block((i as u64).into()))
+        .collect::<Vec<_>>();
+
+    let block_headers = join_all(futures).wait().unwrap();
+
+    let mut blocks: Vec<Vec<u8>> = vec![];
+    let mut hashes: Vec<H256> = vec![];
+    for block_header in block_headers {
+        let mut stream = RlpStream::new();
+        rlp_append(&block_header.clone().unwrap(), &mut stream);
+        blocks.push(stream.out());
+        hashes.push(H256(block_header.clone().unwrap().hash.unwrap().0.into()));
+    }
+
+    (blocks, hashes)
+}
+
 #[test]
 fn should_make_http_call_and_parse_result() {
 	let (offchain, state) = testing::TestOffchainExt::new();
@@ -156,5 +288,32 @@ fn set_block_response(state: &mut testing::OffchainState) {
 		}"#.to_vec()),
 		sent: true,
 		..Default::default()
+	});
+}
+
+#[test]
+fn should_add_headers_and_verify() {
+	let mut t = sp_io::TestExternalities::default();
+	t.execute_with(|| {
+	    let (blocks, _) = get_blocks(&WEB3RS, 400_000, 400_001);
+	    let pair = sp_core::sr25519::Pair::from_seed(b"12345678901234567890123456789012");
+	    let dmr = read_roots_collection();
+	    assert_ok!(Example::init(
+	        Origin::signed(pair.public()),
+	        0,
+	        read_roots_collection().dag_merkle_roots,
+	        blocks[0].clone(),
+	        U256::from(30),
+	        U256::from(10),
+	        U256::from(10),
+	        None,
+	    ));
+
+	    assert_eq!(dmr.dag_merkle_roots[0], Example::dag_merkle_root(0));
+	    assert_eq!(dmr.dag_merkle_roots[10], Example::dag_merkle_root(10));
+	    assert_eq!(dmr.dag_merkle_roots[511], Example::dag_merkle_root(511));
+
+	    let result = catch_unwind_silent(|| Example::dag_merkle_root(512));
+	    assert!(result.is_err());
 	});
 }

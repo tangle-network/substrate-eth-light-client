@@ -35,6 +35,13 @@ hex = { version = "0.4", default-features = false }
 ethash = { git = "https://github.com/rust-ethereum/rust-ethash", default-features = false }
 tiny-keccak = { version = "2.0.1", features = ["keccak"] }
 
+[dev-dependencies]
+web3 = "0.8.0"
+futures = "0.1.26"
+lazy_static = "1.4.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
 [features]
 default = ['std']
 std = [
