@@ -30,6 +30,7 @@ lite-json = { git = "https://github.com/jnaviask/lite-json.git", branch = "jnavi
 ethereum = { version = "0.4", default-features = false, features = ["with-codec"] }
 ethereum-types = { version = "0.9", default-features = false }
 rlp = { version = "0.4", default-features = false }
+rlp-derive = { version = "0.1.0", default-features = false }
 sha3 = { version = "0.8", default-features = false }
 hex = { version = "0.4", default-features = false }
 ethash = { git = "https://github.com/rust-ethereum/rust-ethash", default-features = false }

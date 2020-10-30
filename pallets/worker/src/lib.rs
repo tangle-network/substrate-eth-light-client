@@ -29,6 +29,7 @@ use ethereum_types::{H64, H128, U256, H256, H512};
 
 #[cfg(test)]
 mod tests;
+mod types;
 mod prover;
 
 /// Defines application identifier for crypto keys of this module.
@@ -143,7 +144,7 @@ decl_storage! {
 		/// header number -> hashes of all headers with this number.
 		pub AllHeaderHashes get(fn all_header_hashes): map hasher(twox_64_concat) U256 => Vec<H256>;
 		/// Known headers. Stores up to `finalized_gc_threshold`.
-		pub Headers get(fn headers): map hasher(twox_64_concat) H256 => Option<ethereum::Header>;
+		pub Headers get(fn headers): map hasher(twox_64_concat) H256 => Option<types::BlockHeader>;
 		/// Minimal information about the headers, like cumulative difficulty. Stores up to
 		/// `finalized_gc_threshold`.
 		pub Infos get(fn infos): map hasher(twox_64_concat) H256 => Option<HeaderInfo>;
@@ -195,10 +196,10 @@ decl_module! {
 			<NumConfirmations>::set(Some(num_confirmations));
 			<TrustedSigner<T>>::set(trusted_signer);
 
-			let header: ethereum::Header = rlp::decode(first_header.as_slice()).unwrap();
-			let header_hash = header.hash();
+			let header: types::BlockHeader = rlp::decode(first_header.as_slice()).unwrap();
+			let header_hash = header.hash.unwrap();
 			println!("{:?}", header_hash);
-			let header_number = header.number;
+			let header_number = U256::from(header.number);
 
 			<BestHeaderHash>::set(header_hash.clone());
 			<AllHeaderHashes>::insert(header_number, vec![header_hash]);
@@ -207,7 +208,7 @@ decl_module! {
 			<Infos>::insert(header_hash, HeaderInfo {
 				total_difficulty: header.difficulty,
 				parent_hash: header.parent_hash,
-				number: header.number,
+				number: U256::from(header.number),
 			});
 		}
 
@@ -221,7 +222,7 @@ decl_module! {
 			dag_nodes: Vec<(Vec<H512>, Vec<H128>)>
 		) {
 			let _signer = ensure_signed(origin)?;
-			let header: ethereum::Header = rlp::decode(block_header.as_slice()).unwrap();
+			let header: types::BlockHeader = rlp::decode(block_header.as_slice()).unwrap();
 			println!("{:?}", header);
 			if let Some(trusted_signer) = Self::trusted_signer() {
 				ensure!(
@@ -248,8 +249,8 @@ decl_module! {
 			};
 
 			if let Some(best_info) = Self::infos(Self::best_header_hash()) {
-				let header_hash = header.hash();
-				let header_number = header.number;
+				let header_hash = header.hash.unwrap();
+				let header_number = U256::from(header.number);
 				if header_number + finalized_gc_threshold < best_info.number {
 					panic!("Header is too old to have a chance to appear on the canonical chain.");
 				}
@@ -297,7 +298,7 @@ decl_module! {
 
 						// Replacing past hashes until we converge into the same parent.
 						// Starting from the parent hash.
-						let mut number = header.number - 1;
+						let mut number = U256::from(header.number) - 1;
 						let mut current_hash = info.clone().parent_hash;
 						loop {
 							if let Some(prev_value) = Self::canonical_header_hashes(number) {
@@ -485,14 +486,14 @@ impl<T: Trait> Module<T> {
 
 	/// Verify PoW of the header.
 	fn verify_header(
-		header: ethereum::Header,
-		prev: ethereum::Header,
+		header: types::BlockHeader,
+		prev: types::BlockHeader,
 		dag_nodes: Vec<(Vec<H512>, Vec<H128>)>
 	) -> bool {
 		let (_mix_hash, result) = Self::hashimoto_merkle(
-			header.hash(),
+			header.hash.unwrap(),
 			header.nonce,
-			header.number,
+			U256::from(header.number),
 			&dag_nodes,
 		);
 		let five_thousand = match U256::from_dec_str("5000") {
@@ -514,7 +515,7 @@ impl<T: Trait> Module<T> {
 			&& header.gas_limit >= five_thousand
 			&& header.timestamp > prev.timestamp
 			&& header.number == prev.number + 1
-			&& header.parent_hash == prev.hash()
+			&& header.parent_hash == prev.hash.unwrap()
 			&& header.extra_data.len() <= 32
 	}
 

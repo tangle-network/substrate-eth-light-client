@@ -4242,6 +4242,7 @@ dependencies = [
  "pallet-timestamp",
  "parity-scale-codec",
  "rlp",
+ "rlp-derive",
  "safe-mix",
  "serde",
  "serde_derive",

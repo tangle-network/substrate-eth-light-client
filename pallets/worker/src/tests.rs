@@ -315,34 +315,30 @@ fn get_blocks(
 	let mut blocks: Vec<Vec<u8>> = vec![];
 	let mut hashes: Vec<H256> = vec![];
 	for block_header in block_headers {
-		let eth_header = ethereum::Header {
-			parent_hash: sp_core::H256(block_header.clone().unwrap().parent_hash.0),
-			ommers_hash: sp_core::H256(block_header.clone().unwrap().uncles_hash.0),
-			beneficiary: sp_core::H160(block_header.clone().unwrap().author.0),
-			state_root: sp_core::H256(block_header.clone().unwrap().state_root.0),
-			transactions_root: sp_core::H256(block_header.clone().unwrap().transactions_root.0),
-			receipts_root: sp_core::H256(block_header.clone().unwrap().receipts_root.0),
-			logs_bloom: block_header.clone().unwrap().logs_bloom.0.into(),
-			difficulty: sp_core::U256(block_header.clone().unwrap().difficulty.0),
-			number: sp_core::U256::from(block_header.clone().unwrap().number.unwrap().as_u64()),
-			gas_limit: sp_core::U256(block_header.clone().unwrap().gas_limit.0),
-			gas_used: sp_core::U256(block_header.clone().unwrap().gas_used.0),
-			timestamp: block_header.clone().unwrap().timestamp.as_u64(),
-			extra_data: block_header.clone().unwrap().extra_data.0,
-			mix_hash: sp_core::H256(block_header.clone().unwrap().mix_hash.unwrap().0),
-			nonce: ethereum_types::H64(block_header.clone().unwrap().nonce.unwrap().0),
-		};
-		println!("{:?}", eth_header.hash());
-		println!("{:?}", H256(block_header.clone().unwrap().hash.unwrap().0.into()));
-		println!("{:?}", block_header);
+		// let eth_header = ethereum::Header {
+		// 	parent_hash: sp_core::H256(block_header.clone().unwrap().parent_hash.0),
+		// 	ommers_hash: sp_core::H256(block_header.clone().unwrap().uncles_hash.0),
+		// 	beneficiary: sp_core::H160(block_header.clone().unwrap().author.0),
+		// 	state_root: sp_core::H256(block_header.clone().unwrap().state_root.0),
+		// 	transactions_root: sp_core::H256(block_header.clone().unwrap().transactions_root.0),
+		// 	receipts_root: sp_core::H256(block_header.clone().unwrap().receipts_root.0),
+		// 	logs_bloom: block_header.clone().unwrap().logs_bloom.0.into(),
+		// 	difficulty: sp_core::U256(block_header.clone().unwrap().difficulty.0),
+		// 	number: sp_core::U256::from(block_header.clone().unwrap().number.unwrap().as_u64()),
+		// 	gas_limit: sp_core::U256(block_header.clone().unwrap().gas_limit.0),
+		// 	gas_used: sp_core::U256(block_header.clone().unwrap().gas_used.0),
+		// 	timestamp: block_header.clone().unwrap().timestamp.as_u64(),
+		// 	extra_data: block_header.clone().unwrap().extra_data.0,
+		// 	mix_hash: sp_core::H256(block_header.clone().unwrap().mix_hash.unwrap().0),
+		// 	nonce: ethereum_types::H64(block_header.clone().unwrap().nonce.unwrap().0),
+		// };
+		// println!("{:?}", eth_header.hash());
+		// println!("{:?}", H256(block_header.clone().unwrap().hash.unwrap().0.into()));
+		// println!("{:?}", block_header);
 		let mut stream = RlpStream::new();
 		rlp_append(&block_header.clone().unwrap(), &mut stream);
 		blocks.push(stream.out());
-		let mut stream = RlpStream::new();
-		rlp_append(&block_header.clone().unwrap(), &mut stream);
-		let header: ethereum::Header = rlp::decode(&stream.out()).unwrap();
-		// println!("{:?}", header.hash());
-		println!("\n");
+		// println!("\n");
 		hashes.push(H256(block_header.clone().unwrap().hash.unwrap().0.into()));
 	}
 
@@ -451,11 +447,11 @@ fn should_add_blocks_2_3_and_verify() {
 			.map(|filename| read_block((&filename).to_string()))
 			.collect();
 
-		for i in 0..blocks.len() {
-			let b = &blocks[i];
-			let header: ethereum::Header = rlp::decode(b.as_slice()).unwrap();
-			println!("{:?}, {:?}", header.hash(), hashes[i]);
-		}
+		// for i in 0..blocks.len() {
+		// 	let b = &blocks[i];
+		// 	let header: ethereum::Header = rlp::decode(b.as_slice()).unwrap();
+		// 	println!("{:?}, {:?}", header.hash(), hashes[i]);
+		// }
 
 		assert_ok!(Example::init(
 			Origin::signed(pair.public()),
