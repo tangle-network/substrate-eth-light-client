@@ -197,6 +197,7 @@ decl_module! {
 
 			let header: ethereum::Header = rlp::decode(first_header.as_slice()).unwrap();
 			let header_hash = header.hash();
+			println!("{:?}", header_hash);
 			let header_number = header.number;
 
 			<BestHeaderHash>::set(header_hash.clone());
@@ -221,7 +222,7 @@ decl_module! {
 		) {
 			let _signer = ensure_signed(origin)?;
 			let header: ethereum::Header = rlp::decode(block_header.as_slice()).unwrap();
-
+			println!("{:?}", header);
 			if let Some(trusted_signer) = Self::trusted_signer() {
 				ensure!(
 					_signer == trusted_signer,
@@ -350,7 +351,7 @@ decl_module! {
 			// to the storage and other included pallets.
 			//
 			// We can easily import `frame_system` and retrieve a block hash of the parent block.
-			let parent_hash = <system::Module<T>>::block_hash(block_number - 1.into());
+			let parent_hash = <system::Module<T>>::block_hash(block_number - 1u32.into());
 			debug::debug!("Current block: {:?} (parent hash: {:?})", block_number, parent_hash);
 			let number = Self::fetch_block().unwrap();
 			debug::info!("{:?}", number);

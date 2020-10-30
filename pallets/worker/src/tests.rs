@@ -166,6 +166,91 @@ impl From<RootsCollectionRaw> for RootsCollection {
         }
     }
 }
+
+#[derive(Debug, Deserialize)]
+struct BlockWithProofsRaw {
+    pub proof_length: u64,
+    pub header_rlp: Hex,
+    pub merkle_root: Hex,        // H128
+    pub elements: Vec<Hex>,      // H256
+    pub merkle_proofs: Vec<Hex>, // H128
+}
+
+#[derive(Debug)]
+struct BlockWithProofs {
+    pub proof_length: u64,
+    pub header_rlp: Hex,
+    pub merkle_root: H128,
+    pub elements: Vec<H256>,
+    pub merkle_proofs: Vec<H128>,
+}
+
+impl From<BlockWithProofsRaw> for BlockWithProofs {
+    fn from(item: BlockWithProofsRaw) -> Self {
+    	let mut temp_merkle_root: [u8; 16] = [0; 16];
+    	for i in 0..16 {
+    		temp_merkle_root[i] = item.merkle_root.0[i];
+    	}
+        Self {
+            proof_length: item.proof_length,
+            header_rlp: item.header_rlp,
+            merkle_root: H128::from(temp_merkle_root),
+            elements: item.elements.iter().map(|e| {
+		    	let mut temp: [u8; 32] = [0; 32];
+		    	for i in 0..e.0.len() {
+		    		temp[i] = e.0[i];
+		    	}
+            	H256::from(temp)
+            }).collect(),
+            merkle_proofs: item
+                .merkle_proofs
+                .iter()
+                .map(|e| {
+			    	let mut temp: [u8; 16] = [0; 16];
+			    	for i in 0..e.0.len() {
+			    		temp[i] = e.0[i];
+			    	}
+	            	H128::from(temp)
+                })
+                .collect(),
+        }
+    }
+}
+
+impl BlockWithProofs {
+    fn combine_dag_h256_to_h512(elements: Vec<H256>) -> Vec<H512> {
+        elements
+            .iter()
+            .zip(elements.iter().skip(1))
+            .enumerate()
+            .filter(|(i, _)| i % 2 == 0)
+            .map(|(_, (a, b))| {
+                let mut buffer = [0u8; 64];
+                buffer[..32].copy_from_slice(&(a.0));
+                buffer[32..].copy_from_slice(&(b.0));
+                H512(buffer.into())
+            })
+            .collect()
+    }
+
+    pub fn to_double_node_with_merkle_proof_vec(&self) -> Vec<(Vec<H512>, Vec<H128>)> {
+        let h512s = Self::combine_dag_h256_to_h512(self.elements.clone());
+        h512s
+            .iter()
+            .zip(h512s.iter().skip(1))
+            .enumerate()
+            .filter(|(i, _)| i % 2 == 0)
+            .map(|(i, (a, b))| {
+                let dag_nodes = vec![*a, *b];
+                let proof = self.merkle_proofs
+                    [i / 2 * self.proof_length as usize..(i / 2 + 1) * self.proof_length as usize]
+                    .to_vec();
+                (dag_nodes, proof)
+            })
+            .collect()
+    }
+}
+
 fn catch_unwind_silent<F: FnOnce() -> R + panic::UnwindSafe, R>(f: F) -> std::thread::Result<R> {
     let prev_hook = panic::take_hook();
     panic::set_hook(Box::new(|_| {}));
@@ -230,14 +315,48 @@ fn get_blocks(
     let mut blocks: Vec<Vec<u8>> = vec![];
     let mut hashes: Vec<H256> = vec![];
     for block_header in block_headers {
+    	let eth_header = ethereum::Header {
+			parent_hash: sp_core::H256(block_header.clone().unwrap().parent_hash.0),
+			ommers_hash: sp_core::H256(block_header.clone().unwrap().uncles_hash.0),
+			beneficiary: sp_core::H160(block_header.clone().unwrap().author.0),
+			state_root: sp_core::H256(block_header.clone().unwrap().state_root.0),
+			transactions_root: sp_core::H256(block_header.clone().unwrap().transactions_root.0),
+			receipts_root: sp_core::H256(block_header.clone().unwrap().receipts_root.0),
+			logs_bloom: block_header.clone().unwrap().logs_bloom.0.into(),
+			difficulty: sp_core::U256(block_header.clone().unwrap().difficulty.0),
+			number: sp_core::U256::from(block_header.clone().unwrap().number.unwrap().as_u64()),
+			gas_limit: sp_core::U256(block_header.clone().unwrap().gas_limit.0),
+			gas_used: sp_core::U256(block_header.clone().unwrap().gas_used.0),
+			timestamp: block_header.clone().unwrap().timestamp.as_u64(),
+			extra_data: block_header.clone().unwrap().extra_data.0,
+			mix_hash: sp_core::H256(block_header.clone().unwrap().mix_hash.unwrap().0),
+			nonce: ethereum_types::H64(block_header.clone().unwrap().nonce.unwrap().0),
+    	};
+    	println!("{:?}", eth_header.hash());
+    	println!("{:?}", H256(block_header.clone().unwrap().hash.unwrap().0.into()));
+    	println!("{:?}", block_header);
         let mut stream = RlpStream::new();
         rlp_append(&block_header.clone().unwrap(), &mut stream);
         blocks.push(stream.out());
+        let mut stream = RlpStream::new();
+        rlp_append(&block_header.clone().unwrap(), &mut stream);
+    	let header: ethereum::Header = rlp::decode(&stream.out()).unwrap();
+    	// println!("{:?}", header.hash());
+    	println!("\n");
         hashes.push(H256(block_header.clone().unwrap().hash.unwrap().0.into()));
     }
 
     (blocks, hashes)
 }
+
+fn read_block(filename: String) -> BlockWithProofs {
+    read_block_raw(filename).into()
+}
+
+fn read_block_raw(filename: String) -> BlockWithProofsRaw {
+    serde_json::from_reader(std::fs::File::open(std::path::Path::new(&filename)).unwrap()).unwrap()
+}
+
 
 #[test]
 fn should_make_http_call_and_parse_result() {
@@ -292,7 +411,7 @@ fn set_block_response(state: &mut testing::OffchainState) {
 }
 
 #[test]
-fn should_add_headers_and_verify() {
+fn should_init() {
 	let mut t = sp_io::TestExternalities::default();
 	t.execute_with(|| {
 	    let (blocks, _) = get_blocks(&WEB3RS, 400_000, 400_001);
@@ -316,4 +435,51 @@ fn should_add_headers_and_verify() {
 	    let result = catch_unwind_silent(|| Example::dag_merkle_root(512));
 	    assert!(result.is_err());
 	});
+}
+
+#[test]
+fn should_add_blocks_2_3_and_verify() {
+	let mut t = sp_io::TestExternalities::default();
+	t.execute_with(|| {
+		let pair = sp_core::sr25519::Pair::from_seed(b"12345678901234567890123456789012");
+	    // Check on 3 block from here: https://github.com/KyberNetwork/bridge_eos_smart_contracts/blob/master/scripts/jungle/jungle_relay_3.js
+	    let (blocks, hashes) = get_blocks(&WEB3RS, 2, 4);
+
+	    // $ ../ethrelay/ethashproof/cmd/relayer/relayer 3
+	    let blocks_with_proofs: Vec<BlockWithProofs> = ["./src/data/2.json", "./src/data/3.json"]
+	        .iter()
+	        .map(|filename| read_block((&filename).to_string()))
+	        .collect();
+
+	    for i in 0..blocks.len() {
+	    	let b = &blocks[i];
+	    	let header: ethereum::Header = rlp::decode(b.as_slice()).unwrap();
+	    	println!("{:?}, {:?}", header.hash(), hashes[i]);
+	    }
+
+	    assert_ok!(Example::init(
+	        Origin::signed(pair.public()),
+	        0,
+	        read_roots_collection().dag_merkle_roots,
+	        blocks[0].clone(),
+	        U256::from(30),
+	        U256::from(10),
+	        U256::from(10),
+	        None,
+	    ));
+
+	    for (block, proof) in blocks
+	        .into_iter()
+	        .zip(blocks_with_proofs.into_iter())
+	        .skip(1)
+	    {
+	        assert_ok!(Example::add_block_header(
+	        	Origin::signed(pair.public()),
+	        	block,
+	        	proof.to_double_node_with_merkle_proof_vec(),
+	        ));
+	    }
+
+	    assert_eq!((hashes[1].0), (Example::block_hash(3).unwrap().0));
+	})
 }
