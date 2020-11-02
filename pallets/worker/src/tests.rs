@@ -319,30 +319,9 @@ fn get_blocks(
 	let mut blocks: Vec<Vec<u8>> = vec![];
 	let mut hashes: Vec<H256> = vec![];
 	for block_header in block_headers {
-		// let eth_header = ethereum::Header {
-		// 	parent_hash: sp_core::H256(block_header.clone().unwrap().parent_hash.0),
-		// 	ommers_hash: sp_core::H256(block_header.clone().unwrap().uncles_hash.0),
-		// 	beneficiary: sp_core::H160(block_header.clone().unwrap().author.0),
-		// 	state_root: sp_core::H256(block_header.clone().unwrap().state_root.0),
-		// 	transactions_root: sp_core::H256(block_header.clone().unwrap().transactions_root.0),
-		// 	receipts_root: sp_core::H256(block_header.clone().unwrap().receipts_root.0),
-		// 	logs_bloom: block_header.clone().unwrap().logs_bloom.0.into(),
-		// 	difficulty: sp_core::U256(block_header.clone().unwrap().difficulty.0),
-		// 	number: sp_core::U256::from(block_header.clone().unwrap().number.unwrap().as_u64()),
-		// 	gas_limit: sp_core::U256(block_header.clone().unwrap().gas_limit.0),
-		// 	gas_used: sp_core::U256(block_header.clone().unwrap().gas_used.0),
-		// 	timestamp: block_header.clone().unwrap().timestamp.as_u64(),
-		// 	extra_data: block_header.clone().unwrap().extra_data.0,
-		// 	mix_hash: sp_core::H256(block_header.clone().unwrap().mix_hash.unwrap().0),
-		// 	nonce: ethereum_types::H64(block_header.clone().unwrap().nonce.unwrap().0),
-		// };
-		// println!("{:?}", eth_header.hash());
-		// println!("{:?}", H256(block_header.clone().unwrap().hash.unwrap().0.into()));
-		// println!("{:?}", block_header);
 		let mut stream = RlpStream::new();
 		rlp_append(&block_header.clone().unwrap(), &mut stream);
 		blocks.push(stream.out());
-		// println!("\n");
 		hashes.push(H256(block_header.clone().unwrap().hash.unwrap().0.into()));
 	}
 
@@ -476,4 +455,132 @@ fn add_blocks_2_and_3() {
 
 		assert_eq!((hashes[1].0), (Example::block_hash(3).unwrap().0));
 	})
+}
+
+#[test]
+fn add_400000_block_only() {
+	let mut t = sp_io::TestExternalities::default();
+	t.execute_with(|| {
+		let pair = sp_core::sr25519::Pair::from_seed(b"12345678901234567890123456789012");
+
+		// Check on 400000 block from this answer: https://ethereum.stackexchange.com/a/67333/3032
+		let (blocks, hashes) = get_blocks(&WEB3RS, 400_000, 400_001);
+
+		// $ ../ethrelay/ethashproof/cmd/relayer/relayer 400000
+		// digest: 0x3fbea7af642a4e20cd93a945a1f5e23bd72fc5261153e09102cf718980aeff38
+		// ethash result: 0x00000000000ca599ebe9913fa00da78a4d1dd2fa154c4fd2aad10ccbca52a2a1
+		// Proof length: 24
+		// [400000.json]
+
+		let block_with_proof = read_block("./src/data/400000.json".to_string());
+		assert_ok!(Example::init(
+			Origin::signed(pair.public()),
+			400_000 / 30000,
+			vec![block_with_proof.merkle_root],
+			blocks[0].clone(),
+			U256::from(30),
+			U256::from(10),
+			U256::from(10),
+			None,
+		));
+		assert_eq!((hashes[0].0), Example::block_hash(400_000).unwrap().0);
+	});
+}
+
+#[test]
+fn add_two_blocks_from_8996776() {
+	let mut t = sp_io::TestExternalities::default();
+	t.execute_with(|| {
+		let pair = sp_core::sr25519::Pair::from_seed(b"12345678901234567890123456789012");
+		// Check on 8996777 block from this test: https://github.com/sorpaas/rust-ethash/blob/ac6e42bcb7f40ad2a3b89f7400a61f7baf3f0926/src/lib.rs#L318-L326
+		let (blocks, hashes) = get_blocks(&WEB3RS, 8_996_776, 8_996_778);
+
+		// $ ../ethrelay/ethashproof/cmd/relayer/relayer 8996777
+		let blocks_with_proofs: Vec<BlockWithProofs> =
+			["./src/data/8996776.json", "./src/data/8996777.json"]
+				.iter()
+				.map(|filename| read_block((&filename).to_string()))
+				.collect();
+
+		assert_ok!(Example::init(
+			Origin::signed(pair.public()),
+			0,
+			read_roots_collection().dag_merkle_roots,
+			blocks[0].clone(),
+			U256::from(30),
+			U256::from(10),
+			U256::from(10),
+			None,
+		));
+
+		for (block, proof) in blocks
+			.into_iter()
+			.zip(blocks_with_proofs.into_iter())
+			.skip(1)
+		{
+			assert_ok!(Example::add_block_header(
+				Origin::signed(pair.public()),
+				block,
+				proof.to_double_node_with_merkle_proof_vec(),
+			));
+		}
+
+		assert_eq!(
+			(hashes[0].0),
+			Example::block_hash(8_996_776).unwrap().0
+		);
+		assert_eq!(
+			(hashes[1].0),
+			Example::block_hash(8_996_777).unwrap().0
+		);
+	});
+}
+
+#[test]
+fn add_2_blocks_from_400000() {
+	let mut t = sp_io::TestExternalities::default();
+	t.execute_with(|| {
+		let pair = sp_core::sr25519::Pair::from_seed(b"12345678901234567890123456789012");
+
+		// Check on 400000 block from this answer: https://ethereum.stackexchange.com/a/67333/3032
+		let (blocks, hashes) = get_blocks(&WEB3RS, 400_000, 400_002);
+
+		// $ ../ethrelay/ethashproof/cmd/relayer/relayer 400001
+		// digest: 0x3fbea7af642a4e20cd93a945a1f5e23bd72fc5261153e09102cf718980aeff38
+		// ethash result: 0x00000000000ca599ebe9913fa00da78a4d1dd2fa154c4fd2aad10ccbca52a2a1
+		// Proof length: 24
+		// [400001.json]
+
+		let blocks_with_proofs: Vec<BlockWithProofs> =
+			["./src/data/400000.json", "./src/data/400001.json"]
+				.iter()
+				.map(|filename| read_block((&filename).to_string()))
+				.collect();
+
+		assert_ok!(Example::init(
+			Origin::signed(pair.public()),
+			400_000 / 30000,
+			vec![blocks_with_proofs.first().unwrap().merkle_root],
+			blocks[0].clone(),
+			U256::from(30),
+			U256::from(10),
+			U256::from(10),
+			None,
+		));
+
+		for (block, proof) in blocks
+			.into_iter()
+			.zip(blocks_with_proofs.into_iter())
+			.skip(1)
+		{
+			assert_ok!(Example::add_block_header(
+				Origin::signed(pair.public()),
+				block,
+				proof.to_double_node_with_merkle_proof_vec(),
+			));
+		}
+
+		assert_eq!((hashes[0].0), Example::block_hash(400_000).unwrap().0);
+		assert_eq!((hashes[1].0), Example::block_hash(400_001).unwrap().0);
+	});
 }

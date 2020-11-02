@@ -153,11 +153,3 @@ pub fn keccak256(data: &[u8]) -> [u8; 32] {
 	keccak.finalize(&mut output);
 	output
 }
-
-pub fn keccak512(data: &[u8]) -> [u8; 64] {
-	let mut keccak = Keccak::v512();
-	keccak.update(data);
-	let mut output = [0u8; 64];
-	keccak.finalize(&mut output);
-	output
-}
