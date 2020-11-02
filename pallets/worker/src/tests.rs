@@ -157,8 +157,9 @@ impl From<RootsCollectionRaw> for RootsCollection {
 				.iter()
 				.map(|e| {
 					let mut res: [u8; 16] = [0; 16];
-					for i in 0..16 {
-						res[i] = e.0[i];
+					let carry = if e.0.len() < 16 { 1 } else { 0 };
+					for i in 0..e.0.len() {
+						res[i + carry] = e.0[i];
 					}
 					H128::from(res)
 				})
@@ -197,8 +198,9 @@ impl From<BlockWithProofsRaw> for BlockWithProofs {
 			merkle_root: H128::from(temp_merkle_root),
 			elements: item.elements.iter().map(|e| {
 				let mut temp: [u8; 32] = [0; 32];
+				let carry = if e.0.len() < 32 { 1 } else { 0 };
 				for i in 0..e.0.len() {
-					temp[i] = e.0[i];
+					temp[i + carry] = e.0[i];
 				}
 				H256::from(temp)
 			}).collect(),
@@ -207,9 +209,11 @@ impl From<BlockWithProofsRaw> for BlockWithProofs {
 				.iter()
 				.map(|e| {
 					let mut temp: [u8; 16] = [0; 16];
+					let carry = if e.0.len() < 16 { 1 } else { 0 };
 					for i in 0..e.0.len() {
-						temp[i] = e.0[i];
+						temp[carry + i] = e.0[i];
 					}
+
 					H128::from(temp)
 				})
 				.collect(),
@@ -434,7 +438,7 @@ fn should_init() {
 }
 
 #[test]
-fn should_add_blocks_2_3_and_verify() {
+fn add_blocks_2_and_3() {
 	let mut t = sp_io::TestExternalities::default();
 	t.execute_with(|| {
 		let pair = sp_core::sr25519::Pair::from_seed(b"12345678901234567890123456789012");
@@ -446,12 +450,6 @@ fn should_add_blocks_2_3_and_verify() {
 			.iter()
 			.map(|filename| read_block((&filename).to_string()))
 			.collect();
-
-		// for i in 0..blocks.len() {
-		// 	let b = &blocks[i];
-		// 	let header: ethereum::Header = rlp::decode(b.as_slice()).unwrap();
-		// 	println!("{:?}, {:?}", header.hash(), hashes[i]);
-		// }
 
 		assert_ok!(Example::init(
 			Origin::signed(pair.public()),

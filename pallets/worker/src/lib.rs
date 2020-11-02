@@ -198,7 +198,6 @@ decl_module! {
 
 			let header: types::BlockHeader = rlp::decode(first_header.as_slice()).unwrap();
 			let header_hash = header.hash.unwrap();
-			println!("{:?}", header_hash);
 			let header_number = U256::from(header.number);
 
 			<BestHeaderHash>::set(header_hash.clone());
@@ -223,7 +222,7 @@ decl_module! {
 		) {
 			let _signer = ensure_signed(origin)?;
 			let header: types::BlockHeader = rlp::decode(block_header.as_slice()).unwrap();
-			println!("{:?}", header);
+
 			if let Some(trusted_signer) = Self::trusted_signer() {
 				ensure!(
 					_signer == trusted_signer,
@@ -258,10 +257,9 @@ decl_module! {
 				if let Some(parent_info) = Self::infos(header.parent_hash) {
 					// Record this header in `all_hashes`.
 					let mut all_hashes = Self::all_header_hashes(header_number);
-					ensure!(
-					 all_hashes.iter().any(|x| x == &header_hash),
-					 "Header is already known.",
-					);
+					if all_hashes.len() > 0 {
+						ensure!(all_hashes.iter().any(|x| x == &header_hash), "Header is already known.");
+					}
 					all_hashes.push(header_hash);
 					<AllHeaderHashes>::insert(header_number, all_hashes);
 
@@ -453,7 +451,7 @@ impl<T: Trait> Module<T> {
 			}
 		}
 	}
-
+	//0x823a4ce867a306eca6ecb523198293e46c7e137f4bf29af83590041afa365f11
 	fn truncate_to_h128(arr: H256) -> H128 {
 		let mut data = [0u8; 16];
 		data.copy_from_slice(&(arr.0)[16..]);
@@ -464,17 +462,19 @@ impl<T: Trait> Module<T> {
 		let mut data = [0u8; 64];
 		data[16..32].copy_from_slice(&(l.0));
 		data[48..64].copy_from_slice(&(r.0));
-		Self::truncate_to_h128(sha2_256(&data).into())
+
+		Self::truncate_to_h128(types::sha256(&data).into())
 	}
 
 	pub fn apply_merkle_proof(index: u64, dag_nodes: Vec<H512>, proof: Vec<H128>) -> H128 {
 		let mut data = [0u8; 128];
+
 		data[..64].copy_from_slice(&(dag_nodes[0].0));
 		data[64..].copy_from_slice(&(dag_nodes[1].0));
-
 		let mut leaf = Self::truncate_to_h128(sha2_256(&data).into());
 
 		for i in 0..proof.len() {
+
 			if (index >> i as u64) % 2 == 0 {
 				leaf = Self::hash_h128(leaf, proof[i]);
 			} else {
@@ -491,7 +491,7 @@ impl<T: Trait> Module<T> {
 		dag_nodes: Vec<(Vec<H512>, Vec<H128>)>
 	) -> bool {
 		let (_mix_hash, result) = Self::hashimoto_merkle(
-			header.hash.unwrap(),
+			header.partial_hash.unwrap(),
 			header.nonce,
 			U256::from(header.number),
 			&dag_nodes,
@@ -526,21 +526,16 @@ impl<T: Trait> Module<T> {
 		header_number: U256,
 		nodes: &[(Vec<H512>, Vec<H128>)],
 	) -> (H256, H256) {
-		// Boxed index since ethash::hashimoto gets Fn, but not FnMut
-		// TODO: Remove this std dependency
 		<VerificationIndex>::set(0);
 
 		// Reuse single Merkle root across all the proofs
 		let merkle_root = Self::dag_merkle_root((header_number.as_usize() / 30000) as u64);
-
 		let pair = ethash::hashimoto_with_hasher(
 			header_hash.0.into(),
 			nonce.0.into(),
 			ethash::get_full_size(header_number.as_usize() / 30000),
 			|offset| {
-				// TODO: Remove this std dependency
 				let idx = Self::verification_index() as usize;
-				// TODO: Remove this std dependency
 				<VerificationIndex>::set(Self::verification_index() + 1);
 
 				// Each two nodes are packed into single 128 bytes with Merkle proof
@@ -603,7 +598,7 @@ impl<T: Trait> Module<T> {
 			http::Error::Unknown
 		}).unwrap();
 		// decode JSON into object
-		// println!("{:?}", body_str);
+
 		let val = lite_json::parse_json(&body_str).unwrap();
 
 		// get { "result": VAL }

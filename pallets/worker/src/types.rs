@@ -140,11 +140,24 @@ pub struct Receipt {
 	pub logs: Vec<LogEntry>,
 }
 
+pub fn sha256(data: &[u8]) -> [u8; 32] {
+	let mut buffer = [0u8; 32];
+	buffer.copy_from_slice(&sha2_256(data));
+	buffer
+}
 
 pub fn keccak256(data: &[u8]) -> [u8; 32] {
 	let mut keccak = Keccak::v256();
 	keccak.update(data);
 	let mut output = [0u8; 32];
+	keccak.finalize(&mut output);
+	output
+}
+
+pub fn keccak512(data: &[u8]) -> [u8; 64] {
+	let mut keccak = Keccak::v512();
+	keccak.update(data);
+	let mut output = [0u8; 64];
 	keccak.finalize(&mut output);
 	output
 }
