@@ -23,7 +23,7 @@ use sp_runtime::{
 use tiny_keccak::{Keccak, Hasher};
 use lite_json::json::JsonValue;
 use sp_io::hashing::{sha2_256};
-use ethereum_types::{H64, H128, U256, H256, H512};
+use ethereum_types::{Bloom, H64, H128, H160, U256, H256, H512};
 
 // pub mod eth;
 
@@ -599,10 +599,15 @@ impl<T: Trait> Module<T> {
 		}).unwrap();
 		// decode JSON into object
 
-		let val = lite_json::parse_json(&body_str).unwrap();
+		let val: JsonValue = lite_json::parse_json(&body_str).unwrap();
+		let header: types::BlockHeader = Self::json_to_rlp(val);
+		println!("{:?}", header);
+		Ok(0)
+	}
 
+	pub fn json_to_rlp(json: JsonValue) -> types::BlockHeader {
 		// get { "result": VAL }
-		let block = match val {
+		let block: Option<Vec<(Vec<char>, JsonValue)>> = match json {
 			JsonValue::Object(obj) => {
 				obj.into_iter()
 					.find(|(k, _)| k.iter().map(|c| *c as u8).collect::<Vec<u8>>() == b"result".to_vec())
@@ -616,17 +621,128 @@ impl<T: Trait> Module<T> {
 			_ => None
 		};
 
-		// get { "number": VAL } and convert from hex string -> decimal
-		let number_hex: Vec<char> = block.unwrap().into_iter()
-			.find(|(k, _)| k.iter().map(|c| *c as u8).collect::<Vec<u8>>() == b"number")
+
+		let decoded_difficulty_hex = Self::extract_property_from_block(block.clone(), b"difficulty".to_vec());
+		let difficulty = U256::from_big_endian(&decoded_difficulty_hex[..]);
+
+		let decoded_extra_data_hex = Self::extract_property_from_block(block.clone(), b"extraData".to_vec());
+
+		let decoded_gas_limit_hex = Self::extract_property_from_block(block.clone(), b"gasLimit".to_vec());
+		let gas_limit = U256::from_big_endian(&decoded_gas_limit_hex[..]);
+
+		let decoded_gas_used_hex = Self::extract_property_from_block(block.clone(), b"gasUsed".to_vec());
+		let gas_used = U256::from_big_endian(&decoded_gas_used_hex[..]);
+
+		let decoded_hash_hex = Self::extract_property_from_block(block.clone(), b"hash".to_vec());
+		let mut temp_hash = [0; 32];
+		for i in 0..decoded_hash_hex.len() {
+			temp_hash[i] = decoded_hash_hex[i];
+		}
+		let hash = H256::from(temp_hash);
+
+		let decoded_logs_bloom_hex = Self::extract_property_from_block(block.clone(), b"logsBloom".to_vec());
+		let mut temp_logs_bloom = [0; 256];
+		for i in 0..decoded_logs_bloom_hex.len() {
+			temp_logs_bloom[i] = decoded_logs_bloom_hex[i];
+		}
+		let logs_bloom = Bloom::from(temp_logs_bloom);
+
+		let decoded_miner_hex = Self::extract_property_from_block(block.clone(), b"miner".to_vec());
+		let mut temp_miner = [0; 20];
+		for i in 0..decoded_miner_hex.len() {
+			temp_miner[i] = decoded_miner_hex[i];
+		}
+		let miner = H160::from(temp_miner);
+
+		let decoded_mix_hash_hex = Self::extract_property_from_block(block.clone(), b"mixHash".to_vec());
+		let mut temp_mix_hash = [0; 32];
+		for i in 0..decoded_mix_hash_hex.len() {
+			temp_mix_hash[i] = decoded_mix_hash_hex[i];
+		}
+		let mix_hash = H256::from(temp_mix_hash);
+
+		let decoded_nonce_hex = Self::extract_property_from_block(block.clone(), b"nonce".to_vec());
+		let mut temp_nonce = [0; 8];
+		for i in 0..decoded_nonce_hex.len() {
+			temp_nonce[i] = decoded_nonce_hex[i];
+		}
+		let nonce = H64::from(temp_nonce);
+
+		let decoded_number_hex = Self::extract_property_from_block(block.clone(), b"number".to_vec());
+		let number = U256::from_big_endian(&decoded_number_hex[..]).as_u64();
+
+		let decoded_parent_hash_hex = Self::extract_property_from_block(block.clone(), b"parentHash".to_vec());
+		let mut temp_parent_hash = [0; 32];
+		for i in 0..decoded_parent_hash_hex.len() {
+			temp_parent_hash[i] = decoded_parent_hash_hex[i];
+		}
+		let parent_hash = H256::from(temp_parent_hash);
+
+		let decoded_receipts_root_hex = Self::extract_property_from_block(block.clone(), b"receiptsRoot".to_vec());
+		let mut temp_receipts_root = [0; 32];
+		for i in 0..decoded_receipts_root_hex.len() {
+			temp_receipts_root[i] = decoded_receipts_root_hex[i];
+		}
+		let receipts_root = H256::from(temp_receipts_root);
+
+		let decoded_sha3_uncles_hex = Self::extract_property_from_block(block.clone(), b"sha3Uncles".to_vec());
+		let mut temp_sha3_uncles = [0; 32];
+		for i in 0..decoded_sha3_uncles_hex.len() {
+			temp_sha3_uncles[i] = decoded_sha3_uncles_hex[i];
+		}
+		let uncles_hash = H256::from(temp_sha3_uncles);
+
+		let decoded_state_root_hex = Self::extract_property_from_block(block.clone(), b"stateRoot".to_vec());
+		let mut temp_state_root = [0; 32];
+		for i in 0..decoded_state_root_hex.len() {
+			temp_state_root[i] = decoded_state_root_hex[i];
+		}
+		let state_root = H256::from(temp_state_root);
+
+		let decoded_transactions_root_hex = Self::extract_property_from_block(block.clone(), b"transactionsRoot".to_vec());
+		let mut temp_transactions_root = [0; 32];
+		for i in 0..decoded_transactions_root_hex.len() {
+			temp_transactions_root[i] = decoded_transactions_root_hex[i];
+		}
+		let transactions_root = H256::from(temp_transactions_root);
+
+		let decoded_timestamp_hex = Self::extract_property_from_block(block.clone(), b"timestamp".to_vec());
+		let timestamp = U256::from_big_endian(&decoded_timestamp_hex[..]).as_u64();
+
+
+		let block = types::BlockHeader {
+			parent_hash: parent_hash,
+			uncles_hash: uncles_hash,
+			author: miner,
+			state_root: state_root,
+			transactions_root: transactions_root,
+			receipts_root: receipts_root,
+			log_bloom: logs_bloom,
+			difficulty: difficulty,
+			number: number,
+			gas_limit: gas_limit,
+			gas_used: gas_used,
+			timestamp: timestamp,
+			extra_data: decoded_extra_data_hex,
+			mix_hash: mix_hash,
+			nonce: nonce,
+			hash: Some(hash),
+			partial_hash: None,
+		};
+
+		block
+	}
+
+	pub fn extract_property_from_block(block: Option<Vec<(Vec<char>, JsonValue)>>, property: Vec<u8>) -> Vec<u8> {
+		let extracted_hex: Vec<char> = block.unwrap().into_iter()
+			.find(|(k, _)| k.iter().map(|c| *c as u8).collect::<Vec<u8>>() == property)
 			.and_then(|v| match v.1 {
 				JsonValue::String(n) => Some(n),
 				_ => None,
 			})
 			.unwrap();
-
-		let decoded_vec = hex_to_bytes(&number_hex[..]).unwrap();
-		Ok(U256::from_big_endian(&decoded_vec[..]).low_u32())
+		let decoded_hex = hex_to_bytes(&extracted_hex[..]).unwrap();
+		decoded_hex
 	}
 }
 
