@@ -1,15 +1,17 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+use sp_runtime::offchain::storage::StorageValueRef;
 use sp_std::prelude::*;
 use codec::{Encode, Decode};
 use frame_system::{
 	self as system, ensure_signed,
 	offchain::{
-		AppCrypto, CreateSignedTransaction,
-	}
+		AppCrypto, CreateSignedTransaction, SendSignedTransaction, SendUnsignedTransaction,
+		SignedPayload, SigningTypes, Signer, SubmitTransaction,
+	},
 };
 use frame_support::{
-	debug, decl_module, decl_storage, decl_event, ensure,
+	debug, decl_module, decl_storage, decl_event, ensure, decl_error,
 	traits::Get,
 };
 use sp_core::crypto::KeyTypeId;
@@ -24,13 +26,16 @@ use tiny_keccak::{Keccak, Hasher};
 use lite_json::json::JsonValue;
 use sp_io::hashing::{sha2_256};
 use ethereum_types::{Bloom, H64, H128, H160, U256, H256, H512};
-
+use rlp::RlpStream;
+use ethash::{LightDAG, EthereumPatch};
 // pub mod eth;
 
 #[cfg(test)]
 mod tests;
 mod types;
 mod prover;
+
+pub type DAG = LightDAG<EthereumPatch>;
 
 /// Defines application identifier for crypto keys of this module.
 ///
@@ -39,7 +44,7 @@ mod prover;
 /// When offchain worker is signing transactions it's going to request keys of type
 /// `KeyTypeId` from the keystore and use the ones it finds to sign the transaction.
 /// The keys can be inserted manually via RPC (see `author_insertKey`).
-pub const KEY_TYPE: KeyTypeId = KeyTypeId(*b"btc!");
+pub const KEY_TYPE: KeyTypeId = KeyTypeId(*b"eth!");
 
 /// Based on the above `KeyTypeId` we need to generate a pallet-specific crypto type wrappers.
 /// We can use from supported crypto kinds (`sr25519`, `ed25519` and `ecdsa`) and augment
@@ -53,8 +58,8 @@ pub mod crypto {
 	use sp_core::sr25519::Signature as Sr25519Signature;
 	app_crypto!(sr25519, KEY_TYPE);
 
-	pub struct TestAuthId;
-	impl frame_system::offchain::AppCrypto<<Sr25519Signature as Verify>::Signer, Sr25519Signature> for TestAuthId {
+	pub struct AuthId;
+	impl frame_system::offchain::AppCrypto<<Sr25519Signature as Verify>::Signer, Sr25519Signature> for AuthId {
 		type RuntimeAppPublic = Public;
 		type GenericSignature = sp_core::sr25519::Signature;
 		type GenericPublic = sp_core::sr25519::Public;
@@ -111,6 +116,26 @@ pub fn cross_boundary(val: U256) -> U256 {
 		U256::max_value()
 	} else {
 		((U256::one() << 255) / val) << 1
+	}
+}
+
+decl_error! {
+	pub enum Error for Module<T: Trait> {
+		// Error returned when not sure which ocw function to executed
+		UnknownOffchainMux,
+
+		// Error returned when making signed transactions in off-chain worker
+		NoLocalAcctForSigning,
+		OffchainSignedTxError,
+
+		// Error returned when making unsigned transactions in off-chain worker
+		OffchainUnsignedTxError,
+
+		// Error returned when making unsigned transactions with signed payloads in off-chain worker
+		OffchainUnsignedTxSignedPayloadError,
+
+		// Error returned when fetching github info
+		HttpFetchingError,
 	}
 }
 
@@ -218,11 +243,9 @@ decl_module! {
 		pub fn add_block_header(
 			origin,
 			block_header: Vec<u8>,
-			dag_nodes: Vec<(Vec<H512>, Vec<H128>)>
 		) {
 			let _signer = ensure_signed(origin)?;
 			let header: types::BlockHeader = rlp::decode(block_header.as_slice()).unwrap();
-
 			if let Some(trusted_signer) = Self::trusted_signer() {
 				ensure!(
 					_signer == trusted_signer,
@@ -232,7 +255,7 @@ decl_module! {
 				let prev = Self::headers(header.parent_hash)
 					.expect("Parent header should be present to add a new header");
 				ensure!(
-					Self::verify_header(header.clone(), prev.clone(), dag_nodes),
+					Self::verify_header(header.clone(), prev.clone()),
 					"The header is not valid"
 				);
 			}
@@ -345,15 +368,41 @@ decl_module! {
 			// in WASM or use `debug::native` namespace to produce logs only when the worker is
 			// running natively.
 			debug::native::info!("Hello World from offchain workers!");
-
 			// Since off-chain workers are just part of the runtime code, they have direct access
 			// to the storage and other included pallets.
 			//
 			// We can easily import `frame_system` and retrieve a block hash of the parent block.
 			let parent_hash = <system::Module<T>>::block_hash(block_number - 1u32.into());
 			debug::debug!("Current block: {:?} (parent hash: {:?})", block_number, parent_hash);
-			let number = Self::fetch_block().unwrap();
-			debug::info!("{:?}", number);
+			let header: types::BlockHeader = Self::fetch_block_header().unwrap();
+
+			let mut stream = RlpStream::new();
+			Self::rlp_append(header.clone(), &mut stream);
+			let rlp_header: Vec<u8> = stream.out();
+			let signer = Signer::<T, T::AuthorityId>::any_account();
+
+			// `result` is in the type of `Option<(Account<T>, Result<(), ()>)>`. It is:
+			//   - `None`: no account is available for sending transaction
+			//   - `Some((account, Ok(())))`: transaction is successfully sent
+			//   - `Some((account, Err(())))`: error occured when sending the transaction
+			let result = signer.send_signed_transaction(|_acct|
+				// This is the on-chain function
+				Call::add_block_header(rlp_header.clone())
+			);
+
+			// Display error if the signed tx fails.
+			if let Some((acc, res)) = result {
+				if res.is_err() {
+					debug::error!("failure: offchain_signed_tx: tx sent: {:?}", acc.id);
+					// return Err(<Error<T>>::OffchainSignedTxError);
+				}
+				// Transaction is sent successfully
+				// return Ok(());
+			}
+
+			// // The case of `None`: no account is available for sending
+			// debug::error!("No local account available");
+			// Err(<Error<T>>::NoLocalAcctForSigning)
 		}
 	}
 }
@@ -488,14 +537,44 @@ impl<T: Trait> Module<T> {
 	fn verify_header(
 		header: types::BlockHeader,
 		prev: types::BlockHeader,
-		dag_nodes: Vec<(Vec<H512>, Vec<H128>)>
 	) -> bool {
-		let (_mix_hash, result) = Self::hashimoto_merkle(
-			header.partial_hash.unwrap(),
-			header.nonce,
-			U256::from(header.number),
-			&dag_nodes,
-		);
+		let epoch = (header.number as usize / 30000) as u64;
+		let epoch_info = StorageValueRef::persistent(b"light-client-worker::ethash-epoch");
+		let stored_epoch = match epoch_info.get::<u64>() {
+			Some(e) => e.unwrap(),
+			None => epoch,
+		};
+
+		let mut d: Option<DAG> = None;
+		let cache_info = StorageValueRef::persistent(b"light-client-worker::ethash-cache");
+		// fetch cache or generate if it doesn't exist
+		let mut cache = match cache_info.get::<Vec<u8>>() {
+			Some(c) => c.unwrap(),
+			None => {
+				debug::native::info!("Starting cache generation!");
+				let l_dag = DAG::new(header.number.into());
+				debug::native::info!("Finished cache generation!");
+				l_dag.cache
+			}
+		};
+
+		// when the epoch changes, we need to regenerate the cache
+		// otherwise we repopulate the light DAG with existing cache.
+		if epoch > stored_epoch {
+			debug::native::info!("Restarting cache generation due to epoch change!");
+			epoch_info.set(&epoch);
+			// regeneate cache and store the dag
+			let l_dag = DAG::new(header.number.into());
+			cache = l_dag.cache.clone();
+			d = Some(l_dag);
+		}
+
+		let dag = match d {
+			Some(light_dag) => light_dag,
+			None => DAG::from_cache(cache, header.number.into()),
+		};
+
+		let (_mix_hash, result) = dag.hashimoto(header.partial_hash.unwrap().0.into(), header.nonce.0.into());
 		let five_thousand = match U256::from_dec_str("5000") {
 			Ok(r) => r,
 			Err(_) => panic!("Invalid decimal conversion"),
@@ -519,69 +598,11 @@ impl<T: Trait> Module<T> {
 			&& header.extra_data.len() <= 32
 	}
 
-	/// Verify merkle paths to the DAG nodes.
-	fn hashimoto_merkle(
-		header_hash: H256,
-		nonce: H64,
-		header_number: U256,
-		nodes: &[(Vec<H512>, Vec<H128>)],
-	) -> (H256, H256) {
-		<VerificationIndex>::set(0);
-
-		// Reuse single Merkle root across all the proofs
-		let merkle_root = Self::dag_merkle_root((header_number.as_usize() / 30000) as u64);
-		let pair = ethash::hashimoto_with_hasher(
-			header_hash.0.into(),
-			nonce.0.into(),
-			ethash::get_full_size(header_number.as_usize() / 30000),
-			|offset| {
-				let idx = Self::verification_index() as usize;
-				<VerificationIndex>::set(Self::verification_index() + 1);
-
-				// Each two nodes are packed into single 128 bytes with Merkle proof
-				let node = &nodes[idx as usize / 2];
-				if idx % 2 == 0 && Self::validate_ethash() {
-					// Divide by 2 to adjust offset for 64-byte words instead of 128-byte
-					assert_eq!(
-						merkle_root,
-						Self::apply_merkle_proof(
-							(offset / 2) as u64,
-							node.0.clone(),
-							node.1.clone()
-						)
-					);
-				};
-
-				// Reverse each 32 bytes for ETHASH compatibility
-				let mut data = node.0[idx % 2].0;
-				data[..32].reverse();
-				data[32..].reverse();
-				data.into()
-			},
-			|data| {
-				let mut keccak = Keccak::v256();
-				keccak.update(data);
-				let mut output = [0u8; 32];
-				keccak.finalize(&mut output);
-				output
-			},
-			|data| {
-				let mut keccak = tiny_keccak::Keccak::v512();
-				keccak.update(data);
-				let mut output = [0u8; 64];
-				keccak.finalize(&mut output);
-				output
-			}
-		);
-
-		(H256(pair.0.into()), H256(pair.1.into()))
-	}
-
-	fn fetch_block() -> Result<u32, http::Error> {
+	fn fetch_block_header() -> Result<types::BlockHeader, http::Error> {
 		// Make a post request to an eth chain
 		let body = br#"{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest", false],"id":1}"#;
 		let request: http::Request = http::Request::post(
-			"http://localhost:8545",
+			"https://mainnet.infura.io/v3/b5f870422ee5454fb11937e947154cd2",
 			[ &body[..] ].to_vec(),
 		);
 		let pending = request.send().unwrap();
@@ -601,8 +622,26 @@ impl<T: Trait> Module<T> {
 
 		let val: JsonValue = lite_json::parse_json(&body_str).unwrap();
 		let header: types::BlockHeader = Self::json_to_rlp(val);
-		println!("{:?}", header);
-		Ok(0)
+		Ok(header)
+	}
+
+	pub fn rlp_append(header: types::BlockHeader, stream: &mut RlpStream) {
+		stream.begin_list(15);
+		stream.append(&header.parent_hash);
+		stream.append(&header.uncles_hash);
+		stream.append(&header.author);
+		stream.append(&header.state_root);
+		stream.append(&header.transactions_root);
+		stream.append(&header.receipts_root);
+		stream.append(&header.log_bloom);
+		stream.append(&header.difficulty);
+		stream.append(&header.number);
+		stream.append(&header.gas_limit);
+		stream.append(&header.gas_used);
+		stream.append(&header.timestamp);
+		stream.append(&header.extra_data);
+		stream.append(&header.mix_hash);
+		stream.append(&header.nonce);
 	}
 
 	pub fn json_to_rlp(json: JsonValue) -> types::BlockHeader {
