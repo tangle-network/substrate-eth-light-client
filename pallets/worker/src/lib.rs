@@ -6,8 +6,8 @@ use codec::{Encode, Decode};
 use frame_system::{
 	self as system, ensure_signed,
 	offchain::{
-		AppCrypto, CreateSignedTransaction, SendSignedTransaction, SendUnsignedTransaction,
-		SignedPayload, SigningTypes, Signer, SubmitTransaction,
+		AppCrypto, CreateSignedTransaction, SendSignedTransaction,
+		SignedPayload, Signer,
 	},
 };
 use frame_support::{
@@ -619,7 +619,7 @@ impl<T: Trait> Module<T> {
 			http::Error::Unknown
 		}).unwrap();
 		// decode JSON into object
-
+		debug::native::info!("{:#?}", body_str);
 		let val: JsonValue = lite_json::parse_json(&body_str).unwrap();
 		let header: types::BlockHeader = Self::json_to_rlp(val);
 		Ok(header)
@@ -661,17 +661,23 @@ impl<T: Trait> Module<T> {
 		};
 
 
+		
+		debug::native::info!("Decoding difficulty!");
 		let decoded_difficulty_hex = Self::extract_property_from_block(block.clone(), b"difficulty".to_vec());
 		let difficulty = U256::from_big_endian(&decoded_difficulty_hex[..]);
 
+		debug::native::info!("Decoding extra_data!");
 		let decoded_extra_data_hex = Self::extract_property_from_block(block.clone(), b"extraData".to_vec());
 
+		debug::native::info!("Decoding gas_limit!");
 		let decoded_gas_limit_hex = Self::extract_property_from_block(block.clone(), b"gasLimit".to_vec());
 		let gas_limit = U256::from_big_endian(&decoded_gas_limit_hex[..]);
 
+		debug::native::info!("Decoding gas_used!");
 		let decoded_gas_used_hex = Self::extract_property_from_block(block.clone(), b"gasUsed".to_vec());
 		let gas_used = U256::from_big_endian(&decoded_gas_used_hex[..]);
 
+		debug::native::info!("Decoding hash!");
 		let decoded_hash_hex = Self::extract_property_from_block(block.clone(), b"hash".to_vec());
 		let mut temp_hash = [0; 32];
 		for i in 0..decoded_hash_hex.len() {
@@ -679,6 +685,7 @@ impl<T: Trait> Module<T> {
 		}
 		let hash = H256::from(temp_hash);
 
+		debug::native::info!("Decoding logs_bloom!");
 		let decoded_logs_bloom_hex = Self::extract_property_from_block(block.clone(), b"logsBloom".to_vec());
 		let mut temp_logs_bloom = [0; 256];
 		for i in 0..decoded_logs_bloom_hex.len() {
@@ -686,6 +693,7 @@ impl<T: Trait> Module<T> {
 		}
 		let logs_bloom = Bloom::from(temp_logs_bloom);
 
+		debug::native::info!("Decoding miner!");
 		let decoded_miner_hex = Self::extract_property_from_block(block.clone(), b"miner".to_vec());
 		let mut temp_miner = [0; 20];
 		for i in 0..decoded_miner_hex.len() {
@@ -693,6 +701,7 @@ impl<T: Trait> Module<T> {
 		}
 		let miner = H160::from(temp_miner);
 
+		debug::native::info!("Decoding mix_hash!");
 		let decoded_mix_hash_hex = Self::extract_property_from_block(block.clone(), b"mixHash".to_vec());
 		let mut temp_mix_hash = [0; 32];
 		for i in 0..decoded_mix_hash_hex.len() {
@@ -700,6 +709,7 @@ impl<T: Trait> Module<T> {
 		}
 		let mix_hash = H256::from(temp_mix_hash);
 
+		debug::native::info!("Decoding nonce!");
 		let decoded_nonce_hex = Self::extract_property_from_block(block.clone(), b"nonce".to_vec());
 		let mut temp_nonce = [0; 8];
 		for i in 0..decoded_nonce_hex.len() {
@@ -707,9 +717,11 @@ impl<T: Trait> Module<T> {
 		}
 		let nonce = H64::from(temp_nonce);
 
+		debug::native::info!("Decoding number!");
 		let decoded_number_hex = Self::extract_property_from_block(block.clone(), b"number".to_vec());
 		let number = U256::from_big_endian(&decoded_number_hex[..]).as_u64();
 
+		debug::native::info!("Decoding parent_hash!");
 		let decoded_parent_hash_hex = Self::extract_property_from_block(block.clone(), b"parentHash".to_vec());
 		let mut temp_parent_hash = [0; 32];
 		for i in 0..decoded_parent_hash_hex.len() {
@@ -717,6 +729,7 @@ impl<T: Trait> Module<T> {
 		}
 		let parent_hash = H256::from(temp_parent_hash);
 
+		debug::native::info!("Decoding receipts_root!");
 		let decoded_receipts_root_hex = Self::extract_property_from_block(block.clone(), b"receiptsRoot".to_vec());
 		let mut temp_receipts_root = [0; 32];
 		for i in 0..decoded_receipts_root_hex.len() {
@@ -724,6 +737,7 @@ impl<T: Trait> Module<T> {
 		}
 		let receipts_root = H256::from(temp_receipts_root);
 
+		debug::native::info!("Decoding sha3_uncles!");
 		let decoded_sha3_uncles_hex = Self::extract_property_from_block(block.clone(), b"sha3Uncles".to_vec());
 		let mut temp_sha3_uncles = [0; 32];
 		for i in 0..decoded_sha3_uncles_hex.len() {
@@ -731,6 +745,7 @@ impl<T: Trait> Module<T> {
 		}
 		let uncles_hash = H256::from(temp_sha3_uncles);
 
+		debug::native::info!("Decoding state_root!");
 		let decoded_state_root_hex = Self::extract_property_from_block(block.clone(), b"stateRoot".to_vec());
 		let mut temp_state_root = [0; 32];
 		for i in 0..decoded_state_root_hex.len() {
@@ -738,6 +753,7 @@ impl<T: Trait> Module<T> {
 		}
 		let state_root = H256::from(temp_state_root);
 
+		debug::native::info!("Decoding transactions_root!");
 		let decoded_transactions_root_hex = Self::extract_property_from_block(block.clone(), b"transactionsRoot".to_vec());
 		let mut temp_transactions_root = [0; 32];
 		for i in 0..decoded_transactions_root_hex.len() {
@@ -745,6 +761,7 @@ impl<T: Trait> Module<T> {
 		}
 		let transactions_root = H256::from(temp_transactions_root);
 
+		debug::native::info!("Decoding timestamp!");
 		let decoded_timestamp_hex = Self::extract_property_from_block(block.clone(), b"timestamp".to_vec());
 		let timestamp = U256::from_big_endian(&decoded_timestamp_hex[..]).as_u64();
 
