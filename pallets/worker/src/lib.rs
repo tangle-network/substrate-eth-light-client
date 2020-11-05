@@ -407,14 +407,20 @@ decl_module! {
 	}
 }
 
-fn hex_to_bytes(v: &[char]) -> Result<Vec<u8>, hex::FromHexError> {
-	let v_no_prefix = if v.len() >= 2 && v[0] == '0' && v[1] == 'x' {
-		&v[2..]
-	} else {
-		&v[..]
-	};
-	let v_u8 = v_no_prefix.iter().map(|c| *c as u8).collect::<Vec<u8>>();
-	hex::decode(&v_u8[..])
+fn hex_to_bytes(v: &Vec<char>) -> Result<Vec<u8>, hex::FromHexError> {
+	let mut vec = v.clone();
+
+	// remove 0x prefix
+	if vec.len() >= 2 && vec[0] == '0' && vec[1] == 'x' {
+		vec.drain(0..2);
+	}
+
+	// add leading 0 if odd length
+	if vec.len() % 2 != 0 {
+		vec.insert(0, '0');
+	}
+	let vec_u8 = vec.iter().map(|c| *c as u8).collect::<Vec<u8>>();
+	hex::decode(&vec_u8[..])
 }
 
 impl<T: Trait> Module<T> {
@@ -797,7 +803,7 @@ impl<T: Trait> Module<T> {
 				_ => None,
 			})
 			.unwrap();
-		let decoded_hex = hex_to_bytes(&extracted_hex[..]).unwrap();
+		let decoded_hex = hex_to_bytes(&extracted_hex).unwrap();
 		decoded_hex
 	}
 }
