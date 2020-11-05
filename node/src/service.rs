@@ -43,6 +43,13 @@ pub fn new_partial(config: &Configuration) -> Result<sc_service::PartialComponen
 		sc_service::new_full_parts::<Block, RuntimeApi, Executor>(&config)?;
 	let client = Arc::new(client);
 
+	#[cfg(feature = "ocw")]
+	{
+	    keystore.write().insert_ephemeral_from_seed_by_type::<node_template_runtime::crypto::AuthId>(
+	        "//Alice", node_template_runtime::crypto::KEY_TYPE
+	    ).expect("Creating key with account Alice should succeed.");
+	}
+
 	let select_chain = sc_consensus::LongestChain::new(backend.clone());
 
 	let transaction_pool = sc_transaction_pool::BasicPool::new_full(
