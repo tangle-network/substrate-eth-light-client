@@ -6,7 +6,8 @@ use codec::{Encode, Decode};
 use frame_system::{
 	self as system, ensure_signed,
 	offchain::{
-		AppCrypto, CreateSignedTransaction, SubmitTransaction, Signer,
+		AppCrypto, CreateSignedTransaction, Signer,
+		SigningTypes, SignedPayload, SendSignedTransaction,
 	},
 };
 use frame_support::{
@@ -64,6 +65,18 @@ pub mod crypto {
 		type RuntimeAppPublic = Public;
 		type GenericSignature = sp_core::sr25519::Signature;
 		type GenericPublic = sp_core::sr25519::Public;
+	}
+}
+
+#[derive(Encode, Decode, Clone, PartialEq, Eq)]
+pub struct Payload<Public> {
+	number: u64,
+	public: Public
+}
+
+impl <T: SigningTypes> SignedPayload<T> for Payload<T::Public> {
+	fn public(&self) -> T::Public {
+		self.public.clone()
 	}
 }
 
@@ -225,7 +238,10 @@ decl_module! {
 			origin,
 			block_header: Vec<u8>,
 		) {
+
 			let _signer = ensure_signed(origin)?;
+			debug::native::info!("Header RLP: {:?}!", block_header);
+			debug::native::info!("Signer: {:?}!", _signer);
 			let header: types::BlockHeader = rlp::decode(block_header.as_slice()).unwrap();
 			if let Some(trusted_signer) = Self::trusted_signer() {
 				ensure!(
@@ -349,32 +365,34 @@ decl_module! {
 			Self::rlp_append(header.clone(), &mut stream);
 			let rlp_header: Vec<u8> = stream.out();
 			let signer = Signer::<T, T::AuthorityId>::any_account();
-			debug::native::info!("Header RLP: {:?}!", rlp_header);
-			let call: Call<T>;
-			if Self::initialized() {
-				debug::native::info!("Adding header #: {:?}!", header.number);
-				call = Call::add_block_header(rlp_header.clone());
-			} else {
-				debug::native::info!("Initializing with header #: {:?}!", header.number);
-				let dags_start_epoch: u64 = header.number / 30000;
-				call = Call::init(
-					dags_start_epoch,
-					vec![],
-					rlp_header.clone(),
-					U256::from(30),
-					U256::from(10),
-					U256::from(10),
-					None,
-				);
-			}
 
-			// `submit_unsigned_transaction` returns a type of `Result<(), ()>`
-			//   ref: https://substrate.dev/rustdocs/v2.0.0/frame_system/offchain/struct.SubmitTransaction.html#method.submit_unsigned_transaction
-			SubmitTransaction::<T, Call<T>>::submit_unsigned_transaction(call.into())
-			.map_err(|_| {
-				debug::error!("Failed in offchain_unsigned_tx");
-				<Error<T>>::OffchainUnsignedTxError
-			});
+		    let result = signer.send_signed_transaction(|_acct| {
+				if Self::initialized() {
+					debug::native::info!("Adding header #: {:?}!", header.number);
+					Call::add_block_header(rlp_header.clone())
+				} else {
+					debug::native::info!("Initializing with header #: {:?}!", header.number);
+					let dags_start_epoch: u64 = header.number / 30000;
+					Call::init(
+						dags_start_epoch,
+						vec![],
+						rlp_header.clone(),
+						U256::from(30),
+						U256::from(10),
+						U256::from(10),
+						None,
+					)
+				}
+		    });
+
+		    // Display error if the signed tx fails.
+		    if let Some((acc, res)) = result {
+		        if res.is_err() {
+		            debug::error!("failure: offchain_signed_tx: tx sent: {:?}", acc.id);
+		        }
+		        // Transaction is sent successfully
+		    }
+
 		}
 	}
 }

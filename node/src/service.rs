@@ -10,7 +10,7 @@ use sc_executor::native_executor_instance;
 pub use sc_executor::NativeExecutor;
 use sp_consensus_aura::sr25519::{AuthorityPair as AuraPair};
 use sc_finality_grandpa::{FinalityProofProvider as GrandpaFinalityProofProvider, SharedVoterState};
-
+use sp_keystore::{SyncCryptoStore};
 // Our native executor instance.
 native_executor_instance!(
 	pub Executor,
@@ -43,10 +43,15 @@ pub fn new_partial(config: &Configuration) -> Result<sc_service::PartialComponen
 		sc_service::new_full_parts::<Block, RuntimeApi, Executor>(&config)?;
 	let client = Arc::new(client);
 
+	println!("Hello world!");
 	#[cfg(feature = "ocw")]
 	{
-	    keystore.write().insert_ephemeral_from_seed_by_type::<node_template_runtime::crypto::AuthId>(
-	        "//Alice", node_template_runtime::crypto::KEY_TYPE
+		println!("Hello world! //Alice");
+		const s: &str = "//Alice";
+	    SyncCryptoStore::sr25519_generate_new(
+	    	&*keystore_container.sync_keystore(),
+	    	node_template_runtime::report::KEY_TYPE,
+	        Some(s),
 	    ).expect("Creating key with account Alice should succeed.");
 	}
 

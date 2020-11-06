@@ -110,9 +110,6 @@ impl Trait for Test {
 	type Event = ();
 	type AuthorityId = crypto::AuthId;
 	type Call = Call<Test>;
-	type GracePeriod = GracePeriod;
-	type UnsignedInterval = UnsignedInterval;
-	type UnsignedPriority = UnsignedPriority;
 }
 
 type Example = Module<Test>;
@@ -221,39 +218,39 @@ impl From<BlockWithProofsRaw> for BlockWithProofs {
 	}
 }
 
-impl BlockWithProofs {
-	fn combine_dag_h256_to_h512(elements: Vec<H256>) -> Vec<H512> {
-		elements
-			.iter()
-			.zip(elements.iter().skip(1))
-			.enumerate()
-			.filter(|(i, _)| i % 2 == 0)
-			.map(|(_, (a, b))| {
-				let mut buffer = [0u8; 64];
-				buffer[..32].copy_from_slice(&(a.0));
-				buffer[32..].copy_from_slice(&(b.0));
-				H512(buffer.into())
-			})
-			.collect()
-	}
+// impl BlockWithProofs {
+// 	fn combine_dag_h256_to_h512(elements: Vec<H256>) -> Vec<H512> {
+// 		elements
+// 			.iter()
+// 			.zip(elements.iter().skip(1))
+// 			.enumerate()
+// 			.filter(|(i, _)| i % 2 == 0)
+// 			.map(|(_, (a, b))| {
+// 				let mut buffer = [0u8; 64];
+// 				buffer[..32].copy_from_slice(&(a.0));
+// 				buffer[32..].copy_from_slice(&(b.0));
+// 				H512(buffer.into())
+// 			})
+// 			.collect()
+// 	}
 
-	pub fn to_double_node_with_merkle_proof_vec(&self) -> Vec<(Vec<H512>, Vec<H128>)> {
-		let h512s = Self::combine_dag_h256_to_h512(self.elements.clone());
-		h512s
-			.iter()
-			.zip(h512s.iter().skip(1))
-			.enumerate()
-			.filter(|(i, _)| i % 2 == 0)
-			.map(|(i, (a, b))| {
-				let dag_nodes = vec![*a, *b];
-				let proof = self.merkle_proofs
-					[i / 2 * self.proof_length as usize..(i / 2 + 1) * self.proof_length as usize]
-					.to_vec();
-				(dag_nodes, proof)
-			})
-			.collect()
-	}
-}
+// 	pub fn to_double_node_with_merkle_proof_vec(&self) -> Vec<(Vec<H512>, Vec<H128>)> {
+// 		let h512s = Self::combine_dag_h256_to_h512(self.elements.clone());
+// 		h512s
+// 			.iter()
+// 			.zip(h512s.iter().skip(1))
+// 			.enumerate()
+// 			.filter(|(i, _)| i % 2 == 0)
+// 			.map(|(i, (a, b))| {
+// 				let dag_nodes = vec![*a, *b];
+// 				let proof = self.merkle_proofs
+// 					[i / 2 * self.proof_length as usize..(i / 2 + 1) * self.proof_length as usize]
+// 					.to_vec();
+// 				(dag_nodes, proof)
+// 			})
+// 			.collect()
+// 	}
+// }
 
 fn catch_unwind_silent<F: FnOnce() -> R + panic::UnwindSafe, R>(f: F) -> std::thread::Result<R> {
 	let prev_hook = panic::take_hook();
@@ -498,7 +495,7 @@ fn add_blocks_2_and_3() {
 			None,
 		));
 
-		for (block, proof) in blocks
+		for (block, _proof) in blocks
 			.into_iter()
 			.zip(blocks_with_proofs.into_iter())
 			.skip(1)
@@ -573,7 +570,7 @@ fn add_two_blocks_from_8996776() {
 			None,
 		));
 
-		for (block, proof) in blocks
+		for (block, _proof) in blocks
 			.into_iter()
 			.zip(blocks_with_proofs.into_iter())
 			.skip(1)
@@ -629,7 +626,7 @@ fn add_2_blocks_from_400000() {
 			None,
 		));
 
-		for (block, proof) in blocks
+		for (block, _proof) in blocks
 			.into_iter()
 			.zip(blocks_with_proofs.into_iter())
 			.skip(1)

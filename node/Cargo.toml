@@ -20,6 +20,7 @@ structopt = "0.3.8"
 
 sc-cli = { version = "0.8.0", git = "https://github.com/paritytech/substrate.git", features = ["wasmtime"] }
 sp-core = { version = "2.0.0", git = "https://github.com/paritytech/substrate.git" }
+sp-keystore = { version = "0.8.0", git = "https://github.com/paritytech/substrate.git" }
 sc-executor = { version = "0.8.0", git = "https://github.com/paritytech/substrate.git", features = ["wasmtime"] }
 sc-service = { version = "0.8.0", git = "https://github.com/paritytech/substrate.git", features = ["wasmtime"] }
 sp-inherents = { version = "2.0.0", git = "https://github.com/paritytech/substrate.git" }
