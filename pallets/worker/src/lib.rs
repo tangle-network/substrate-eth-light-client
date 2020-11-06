@@ -6,8 +6,7 @@ use codec::{Encode, Decode};
 use frame_system::{
 	self as system, ensure_signed,
 	offchain::{
-		AppCrypto, CreateSignedTransaction, SendSignedTransaction,
-		SignedPayload, Signer,
+		AppCrypto, CreateSignedTransaction, SubmitTransaction, Signer,
 	},
 };
 use frame_support::{
@@ -17,8 +16,8 @@ use frame_support::{
 use sp_core::crypto::KeyTypeId;
 use sp_runtime::{
 	transaction_validity::{
-		ValidTransaction, TransactionValidity, TransactionSource,
-		TransactionPriority,
+		InvalidTransaction, TransactionSource, TransactionValidity,
+		ValidTransaction,
 	},
 	offchain::{http},
 };
@@ -34,6 +33,8 @@ use ethash::{LightDAG, EthereumPatch};
 mod tests;
 mod types;
 mod prover;
+
+pub const UNSIGNED_TXS_PRIORITY: u64 = 100;
 
 pub type DAG = LightDAG<EthereumPatch>;
 
@@ -67,7 +68,7 @@ pub mod crypto {
 }
 
 /// This pallet's configuration trait
-pub trait Trait: CreateSignedTransaction<Call<Self>> {
+pub trait Trait: system::Trait + CreateSignedTransaction<Call<Self>> {
 	/// The identifier type for an offchain worker.
 	type AuthorityId: AppCrypto<Self::Public, Self::Signature>;
 
@@ -75,26 +76,6 @@ pub trait Trait: CreateSignedTransaction<Call<Self>> {
 	type Event: From<Event<Self>> + Into<<Self as frame_system::Trait>::Event>;
 	/// The overarching dispatch call type.
 	type Call: From<Call<Self>>;
-
-	// Configuration parameters
-
-	/// A grace period after we send transaction.
-	///
-	/// To avoid sending too many transactions, we only attempt to send one
-	/// every `GRACE_PERIOD` blocks. We use Local Storage to coordinate
-	/// sending between distinct runs of this offchain worker.
-	type GracePeriod: Get<Self::BlockNumber>;
-
-	/// Number of blocks of cooldown after unsigned transaction is included.
-	///
-	/// This ensures that we only accept unsigned transactions once, every `UnsignedInterval` blocks.
-	type UnsignedInterval: Get<Self::BlockNumber>;
-
-	/// A configuration for base priority of unsigned transactions.
-	///
-	/// This is exposed so that it can be tuned for particular runtime, when
-	/// multiple pallets send unsigned transactions.
-	type UnsignedPriority: Get<TransactionPriority>;
 }
 
 /// Minimal information about a header.
@@ -360,50 +341,40 @@ decl_module! {
 		/// so the code should be able to handle that.
 		/// You can use `Local Storage` API to coordinate runs of the worker.
 		fn offchain_worker(block_number: T::BlockNumber) {
-			// It's a good idea to add logs to your offchain workers.
-			// Using the `frame_support::debug` module you have access to the same API exposed by
-			// the `log` crate.
-			// Note that having logs compiled to WASM may cause the size of the blob to increase
-			// significantly. You can use `RuntimeDebug` custom derive to hide details of the types
-			// in WASM or use `debug::native` namespace to produce logs only when the worker is
-			// running natively.
-			debug::native::info!("Hello World from offchain workers!");
-			// Since off-chain workers are just part of the runtime code, they have direct access
-			// to the storage and other included pallets.
-			//
-			// We can easily import `frame_system` and retrieve a block hash of the parent block.
 			let parent_hash = <system::Module<T>>::block_hash(block_number - 1u32.into());
-			debug::debug!("Current block: {:?} (parent hash: {:?})", block_number, parent_hash);
+			debug::native::info!("Current block: {:?} (parent hash: {:?})", block_number, parent_hash);
 			let header: types::BlockHeader = Self::fetch_block_header().unwrap();
 
 			let mut stream = RlpStream::new();
 			Self::rlp_append(header.clone(), &mut stream);
 			let rlp_header: Vec<u8> = stream.out();
 			let signer = Signer::<T, T::AuthorityId>::any_account();
-
-			// `result` is in the type of `Option<(Account<T>, Result<(), ()>)>`. It is:
-			//   - `None`: no account is available for sending transaction
-			//   - `Some((account, Ok(())))`: transaction is successfully sent
-			//   - `Some((account, Err(())))`: error occured when sending the transaction
-			let result = signer.send_signed_transaction(|_acct|
-				// This is the on-chain function
-				Call::add_block_header(rlp_header.clone())
-			);
-
-			// Display error if the signed tx fails.
-			if let Some((acc, res)) = result {
-				if res.is_err() {
-					debug::error!("failure: offchain_signed_tx: tx sent: {:?}", acc.id);
-					// return Err(<Error<T>>::OffchainSignedTxError);
-				}
-				debug::debug!("Submitted the tx!");
-				// Transaction is sent successfully
-				// return Ok(());
+			debug::native::info!("Header RLP: {:?}!", rlp_header);
+			let call: Call<T>;
+			if Self::initialized() {
+				debug::native::info!("Adding header #: {:?}!", header.number);
+				call = Call::add_block_header(rlp_header.clone());
+			} else {
+				debug::native::info!("Initializing with header #: {:?}!", header.number);
+				let dags_start_epoch: u64 = header.number / 30000;
+				call = Call::init(
+					dags_start_epoch,
+					vec![],
+					rlp_header.clone(),
+					U256::from(30),
+					U256::from(10),
+					U256::from(10),
+					None,
+				);
 			}
 
-			// // The case of `None`: no account is available for sending
-			// debug::error!("No local account available");
-			// Err(<Error<T>>::NoLocalAcctForSigning)
+			// `submit_unsigned_transaction` returns a type of `Result<(), ()>`
+			//   ref: https://substrate.dev/rustdocs/v2.0.0/frame_system/offchain/struct.SubmitTransaction.html#method.submit_unsigned_transaction
+			SubmitTransaction::<T, Call<T>>::submit_unsigned_transaction(call.into())
+			.map_err(|_| {
+				debug::error!("Failed in offchain_unsigned_tx");
+				<Error<T>>::OffchainUnsignedTxError
+			});
 		}
 	}
 }
@@ -808,34 +779,30 @@ impl<T: Trait> Module<T> {
 	}
 }
 
-#[allow(deprecated)] // ValidateUnsigned
 impl<T: Trait> frame_support::unsigned::ValidateUnsigned for Module<T> {
 	type Call = Call<T>;
 
-	/// Validate unsigned call to this module.
-	///
-	/// By default unsigned transactions are disallowed, but implementing the validator
-	/// here we make sure that some particular calls (the ones produced by offchain worker)
-	/// are being whitelisted and marked as valid.
-	fn validate_unsigned(
-		_source: TransactionSource,
-		_call: &Self::Call,
-	) -> TransactionValidity {
-		ValidTransaction::with_tag_prefix("ExampleOffchainWorker")
-		// We set base priority to 2**20 and hope it's included before any other
-		// transactions in the pool. Next we tweak the priority depending on how much
-		// it differs from the current average. (the more it differs the more priority it
-		// has).
-		.priority(T::UnsignedPriority::get())
-		// The transaction is only valid for next 5 blocks. After that it's
-		// going to be revalidated by the pool.
-		.longevity(5)
-		// It's fine to propagate that transaction to other peers, which means it can be
-		// created even by nodes that don't produce blocks.
-		// Note that sometimes it's better to keep it for yourself (if you are the block
-		// producer), since for instance in some schemes others may copy your solution and
-		// claim a reward.
-		.propagate(true)
-		.build()
+	fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
+		let valid_tx = |provide| ValidTransaction::with_tag_prefix("ocw-demo")
+			.priority(UNSIGNED_TXS_PRIORITY)
+			.and_provides([&provide])
+			.longevity(3)
+			.propagate(true)
+			.build();
+
+		match call {
+			Call::init(
+				_dags_start_epoch,
+				_dags_merkle_roots,
+				_first_header,
+				_hashes_gc_threshold,
+				_finalized_gc_threshold,
+				_num_confirmations,
+				_trusted_signer,
+			) => valid_tx(b"init".to_vec()),
+			Call::add_block_header(_header) => valid_tx(b"add_block_header".to_vec()),
+			// -- snip --
+			_ => InvalidTransaction::Call.into(),
+		}
 	}
 }

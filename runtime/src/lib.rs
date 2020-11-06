@@ -245,12 +245,6 @@ impl pallet_sudo::Trait for Runtime {
 	type Call = Call;
 }
 
-parameter_types! {
-	pub const GracePeriod: u64 = 5;
-	pub const UnsignedInterval: u64 = 128;
-	pub const UnsignedPriority: u64 = 1 << 20;
-}
-
 impl<LocalCall> frame_system::offchain::CreateSignedTransaction<LocalCall> for Runtime
 	where
 		Call: From<LocalCall>,
@@ -341,9 +335,6 @@ impl pallet_worker::Trait for Runtime {
 	type Event = Event;
 	type AuthorityId = report::ReporterAppCrypto;
 	type Call = Call;
-	type GracePeriod = GracePeriod;
-	type UnsignedInterval = UnsignedInterval;
-	type UnsignedPriority = UnsignedPriority;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
@@ -363,7 +354,7 @@ construct_runtime!(
 		TransactionPayment: pallet_transaction_payment::{Module, Storage},
 		Sudo: pallet_sudo::{Module, Call, Config<T>, Storage, Event<T>},
 		// Include the custom logic from the template pallet in the runtime.
-		Worker: pallet_worker::{Module, Call, Storage, Event<T>},
+		Worker: pallet_worker::{Module, Call, Storage, Event<T>, ValidateUnsigned},
 	}
 );
 
