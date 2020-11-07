@@ -27,7 +27,7 @@ use lite_json::json::JsonValue;
 use sp_io::hashing::{sha2_256};
 use ethereum_types::{Bloom, H64, H128, H160, U256, H256, H512};
 use rlp::RlpStream;
-use ethash::{LightDAG, EthereumPatch};
+use ethash::{LightDAG, EthereumPatch, Patch};
 // pub mod eth;
 
 #[cfg(test)]
@@ -237,12 +237,11 @@ decl_module! {
 		pub fn add_block_header(
 			origin,
 			block_header: Vec<u8>,
+			cache: Vec<u8>,
 		) {
-
 			let _signer = ensure_signed(origin)?;
-			debug::native::info!("Header RLP: {:?}!", block_header);
-			debug::native::info!("Signer: {:?}!", _signer);
 			let header: types::BlockHeader = rlp::decode(block_header.as_slice()).unwrap();
+			let l_dag = DAG::from_cache(cache, header.number.into());
 			if let Some(trusted_signer) = Self::trusted_signer() {
 				ensure!(
 					_signer == trusted_signer,
@@ -252,7 +251,7 @@ decl_module! {
 				let prev = Self::headers(header.parent_hash)
 					.expect("Parent header should be present to add a new header");
 				ensure!(
-					Self::verify_header(header.clone(), prev.clone()),
+					Self::verify_header(header.clone(), prev.clone(), l_dag),
 					"The header is not valid"
 				);
 			}
@@ -361,19 +360,51 @@ decl_module! {
 			debug::native::info!("Current block: {:?} (parent hash: {:?})", block_number, parent_hash);
 			let header: types::BlockHeader = Self::fetch_block_header().unwrap();
 
+			let epoch = (header.number as usize / 30000) as u64;
+			let epoch_info = StorageValueRef::persistent(b"light-client-worker::ethash-epoch");
+			let stored_epoch = match epoch_info.get::<u64>() {
+				Some(e) => e.unwrap(),
+				None => epoch,
+			};
+
+			let cache_info = StorageValueRef::persistent(b"light-client-worker::ethash-cache");
+			// fetch cache or generate if it doesn't exist
+			// TODO: Add storage lock here
+			let mut cache = match cache_info.get::<Vec<u8>>() {
+				Some(c) => c.unwrap(),
+				None => {
+					debug::native::info!("Starting cache generation!");
+					let l_dag = DAG::new(header.number.into());
+					debug::native::info!("Finished cache generation!");
+					cache_info.set(&l_dag.cache);
+					l_dag.cache.clone()
+				}
+			};
+
+			// when the epoch changes, we need to regenerate the cache
+			// otherwise we repopulate the light DAG with existing cache.
+			if epoch > stored_epoch {
+				debug::native::info!("Restarting cache generation due to epoch change!");
+				epoch_info.set(&epoch);
+				// regeneate cache and store the dag
+				let l_dag = DAG::new(header.number.into());
+				cache = l_dag.cache.clone();
+			}
+
 			let mut stream = RlpStream::new();
 			Self::rlp_append(header.clone(), &mut stream);
 			let rlp_header: Vec<u8> = stream.out();
 			let signer = Signer::<T, T::AuthorityId>::any_account();
 
-		    let result = signer.send_signed_transaction(|_acct| {
-				if Self::initialized() {
-					debug::native::info!("Adding header #: {:?}!", header.number);
-					Call::add_block_header(rlp_header.clone())
-				} else {
+			let call = if Self::initialized() {
+				debug::native::info!("Adding header #: {:?}!", header.number);
+				Some(Call::add_block_header(rlp_header.clone(), cache))
+			} else {
+				let latest_block_number = Self::last_block_number();
+				if U256::from(header.number) > latest_block_number {
 					debug::native::info!("Initializing with header #: {:?}!", header.number);
 					let dags_start_epoch: u64 = header.number / 30000;
-					Call::init(
+					Some(Call::init(
 						dags_start_epoch,
 						vec![],
 						rlp_header.clone(),
@@ -381,18 +412,23 @@ decl_module! {
 						U256::from(10),
 						U256::from(10),
 						None,
-					)
+					))
+				} else {
+					debug::native::info!("Skipping adding #: {:?}, already added!", header.number);
+					None
 				}
-		    });
+			};
 
-		    // Display error if the signed tx fails.
-		    if let Some((acc, res)) = result {
-		        if res.is_err() {
-		            debug::error!("failure: offchain_signed_tx: tx sent: {:?}", acc.id);
-		        }
-		        // Transaction is sent successfully
-		    }
-
+			if let Some(c) = call {
+			    let result = signer.send_signed_transaction(|_acct| c.clone());
+			    // Display error if the signed tx fails.
+			    if let Some((acc, res)) = result {
+			        if res.is_err() {
+			            debug::error!("failure: offchain_signed_tx: tx sent: {:?}", acc.id);
+			        }
+			        // Transaction is sent successfully
+			    }
+			}
 		}
 	}
 }
@@ -533,43 +569,8 @@ impl<T: Trait> Module<T> {
 	fn verify_header(
 		header: types::BlockHeader,
 		prev: types::BlockHeader,
+		dag: LightDAG<EthereumPatch>,
 	) -> bool {
-		let epoch = (header.number as usize / 30000) as u64;
-		let epoch_info = StorageValueRef::persistent(b"light-client-worker::ethash-epoch");
-		let stored_epoch = match epoch_info.get::<u64>() {
-			Some(e) => e.unwrap(),
-			None => epoch,
-		};
-
-		let mut d: Option<DAG> = None;
-		let cache_info = StorageValueRef::persistent(b"light-client-worker::ethash-cache");
-		// fetch cache or generate if it doesn't exist
-		let mut cache = match cache_info.get::<Vec<u8>>() {
-			Some(c) => c.unwrap(),
-			None => {
-				debug::native::info!("Starting cache generation!");
-				let l_dag = DAG::new(header.number.into());
-				debug::native::info!("Finished cache generation!");
-				l_dag.cache
-			}
-		};
-
-		// when the epoch changes, we need to regenerate the cache
-		// otherwise we repopulate the light DAG with existing cache.
-		if epoch > stored_epoch {
-			debug::native::info!("Restarting cache generation due to epoch change!");
-			epoch_info.set(&epoch);
-			// regeneate cache and store the dag
-			let l_dag = DAG::new(header.number.into());
-			cache = l_dag.cache.clone();
-			d = Some(l_dag);
-		}
-
-		let dag = match d {
-			Some(light_dag) => light_dag,
-			None => DAG::from_cache(cache, header.number.into()),
-		};
-
 		let (_mix_hash, result) = dag.hashimoto(header.partial_hash.unwrap().0.into(), header.nonce.0.into());
 		let five_thousand = match U256::from_dec_str("5000") {
 			Ok(r) => r,
@@ -818,7 +819,7 @@ impl<T: Trait> frame_support::unsigned::ValidateUnsigned for Module<T> {
 				_num_confirmations,
 				_trusted_signer,
 			) => valid_tx(b"init".to_vec()),
-			Call::add_block_header(_header) => valid_tx(b"add_block_header".to_vec()),
+			Call::add_block_header(_header, _cache) => valid_tx(b"add_block_header".to_vec()),
 			// -- snip --
 			_ => InvalidTransaction::Call.into(),
 		}

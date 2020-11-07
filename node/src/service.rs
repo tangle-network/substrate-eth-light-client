@@ -43,10 +43,8 @@ pub fn new_partial(config: &Configuration) -> Result<sc_service::PartialComponen
 		sc_service::new_full_parts::<Block, RuntimeApi, Executor>(&config)?;
 	let client = Arc::new(client);
 
-	println!("Hello world!");
 	#[cfg(feature = "ocw")]
 	{
-		println!("Hello world! //Alice");
 		const s: &str = "//Alice";
 	    SyncCryptoStore::sr25519_generate_new(
 	    	&*keystore_container.sync_keystore(),

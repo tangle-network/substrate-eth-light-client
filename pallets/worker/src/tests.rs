@@ -495,6 +495,8 @@ fn add_blocks_2_and_3() {
 			None,
 		));
 
+		let l_dag = DAG::new(2.into());
+
 		for (block, _proof) in blocks
 			.into_iter()
 			.zip(blocks_with_proofs.into_iter())
@@ -503,6 +505,7 @@ fn add_blocks_2_and_3() {
 			assert_ok!(Example::add_block_header(
 				Origin::signed(pair.public()),
 				block,
+				l_dag.cache.clone(),
 			));
 		}
 
@@ -570,6 +573,8 @@ fn add_two_blocks_from_8996776() {
 			None,
 		));
 
+		let l_dag = DAG::new(8_996_776.into());
+
 		for (block, _proof) in blocks
 			.into_iter()
 			.zip(blocks_with_proofs.into_iter())
@@ -578,6 +583,7 @@ fn add_two_blocks_from_8996776() {
 			assert_ok!(Example::add_block_header(
 				Origin::signed(pair.public()),
 				block,
+				l_dag.cache.clone(),
 			));
 		}
 
@@ -626,6 +632,8 @@ fn add_2_blocks_from_400000() {
 			None,
 		));
 
+		let l_dag = DAG::new(400_000.into());
+
 		for (block, _proof) in blocks
 			.into_iter()
 			.zip(blocks_with_proofs.into_iter())
@@ -634,6 +642,7 @@ fn add_2_blocks_from_400000() {
 			assert_ok!(Example::add_block_header(
 				Origin::signed(pair.public()),
 				block,
+				l_dag.cache.clone(),
 			));
 		}
 
