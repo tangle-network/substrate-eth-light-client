@@ -1,5 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+use sp_runtime::traits::Extrinsic;
+use sp_runtime::traits::IdentifyAccount;
 use sp_runtime::offchain::storage::StorageValueRef;
 use sp_std::prelude::*;
 use codec::{Encode, Decode};
@@ -437,7 +439,7 @@ decl_module! {
 					account_data.nonce
 				).unwrap();
 
-				if let Ok(xt) = T::Extrinsic::new(tx.into(), signature) {
+				if let Some(xt) = T::Extrinsic::new(tx.into(), Some(signature)) {
 					debug::native::info!("{:?}", hex::encode(xt.encode()));
 					let res = sp_io::offchain::submit_transaction(xt.encode());
 					if res.is_ok() {
