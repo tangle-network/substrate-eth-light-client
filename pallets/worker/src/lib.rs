@@ -12,7 +12,6 @@ use frame_system::{
 };
 use frame_support::{
 	debug, decl_module, decl_storage, decl_event, ensure, decl_error,
-	traits::Get,
 };
 use sp_core::crypto::KeyTypeId;
 use sp_runtime::{
@@ -27,7 +26,7 @@ use lite_json::json::JsonValue;
 use sp_io::hashing::{sha2_256};
 use ethereum_types::{Bloom, H64, H128, H160, U256, H256, H512};
 use rlp::RlpStream;
-use ethash::{LightDAG, EthereumPatch, Patch};
+use ethash::{LightDAG, EthereumPatch};
 // pub mod eth;
 
 #[cfg(test)]
@@ -360,6 +359,11 @@ decl_module! {
 			debug::native::info!("Current block: {:?} (parent hash: {:?})", block_number, parent_hash);
 			let header: types::BlockHeader = Self::fetch_block_header().unwrap();
 
+			if Self::initialized() && header.number <= Self::last_block_number().as_u64() {
+				debug::native::info!("Already initialized (current: {:?}, last: {:?})", Self::last_block_number().as_u64(), header.number);
+				return;
+			}
+
 			let epoch = (header.number as usize / 30000) as u64;
 			let epoch_info = StorageValueRef::persistent(b"light-client-worker::ethash-epoch");
 			let stored_epoch = match epoch_info.get::<u64>() {
@@ -383,7 +387,7 @@ decl_module! {
 
 			// when the epoch changes, we need to regenerate the cache
 			// otherwise we repopulate the light DAG with existing cache.
-			if epoch > stored_epoch {
+			if Self::initialized() && epoch > stored_epoch {
 				debug::native::info!("Restarting cache generation due to epoch change!");
 				epoch_info.set(&epoch);
 				// regeneate cache and store the dag
@@ -395,16 +399,17 @@ decl_module! {
 			Self::rlp_append(header.clone(), &mut stream);
 			let rlp_header: Vec<u8> = stream.out();
 			let signer = Signer::<T, T::AuthorityId>::any_account();
-
-			let call = if Self::initialized() {
-				debug::native::info!("Adding header #: {:?}!", header.number);
-				Some(Call::add_block_header(rlp_header.clone(), cache))
-			} else {
-				let latest_block_number = Self::last_block_number();
-				if U256::from(header.number) > latest_block_number {
+			debug::native::info!("Sending TX!");
+			let result = signer.send_signed_transaction(|_acct| {
+				if Self::initialized() {
+					debug::native::info!("Adding header #: {:?}!", header.number);
+					let call = Call::add_block_header(rlp_header.clone(), cache.clone());
+					debug::native::info!("{:?}", call.encode());
+					call
+				} else {
 					debug::native::info!("Initializing with header #: {:?}!", header.number);
 					let dags_start_epoch: u64 = header.number / 30000;
-					Some(Call::init(
+					Call::init(
 						dags_start_epoch,
 						vec![],
 						rlp_header.clone(),
@@ -412,22 +417,16 @@ decl_module! {
 						U256::from(10),
 						U256::from(10),
 						None,
-					))
-				} else {
-					debug::native::info!("Skipping adding #: {:?}, already added!", header.number);
-					None
+					)
 				}
-			};
+			});
 
-			if let Some(c) = call {
-			    let result = signer.send_signed_transaction(|_acct| c.clone());
-			    // Display error if the signed tx fails.
-			    if let Some((acc, res)) = result {
-			        if res.is_err() {
-			            debug::error!("failure: offchain_signed_tx: tx sent: {:?}", acc.id);
-			        }
-			        // Transaction is sent successfully
-			    }
+			// Display error if the signed tx fails.
+			if let Some((acc, res)) = result {
+				if res.is_err() {
+					debug::error!("failure: offchain_signed_tx: tx sent: {:?}", acc.id);
+				}
+				// Transaction is sent successfully
 			}
 		}
 	}
@@ -532,7 +531,7 @@ impl<T: Trait> Module<T> {
 			}
 		}
 	}
-	//0x823a4ce867a306eca6ecb523198293e46c7e137f4bf29af83590041afa365f11
+
 	fn truncate_to_h128(arr: H256) -> H128 {
 		let mut data = [0u8; 16];
 		data.copy_from_slice(&(arr.0)[16..]);
