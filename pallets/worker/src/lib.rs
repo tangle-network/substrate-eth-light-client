@@ -6,13 +6,12 @@ use codec::{Encode, Decode};
 use frame_system::{
 	self as system, ensure_signed,
 	offchain::{
-		AppCrypto, CreateSignedTransaction, Signer,
-		SigningTypes, SignedPayload, SendSignedTransaction,
+		AppCrypto, CreateSignedTransaction, Signer, Account,
+		SigningTypes, SignedPayload,
 	},
 };
 use frame_support::{
 	debug, decl_module, decl_storage, decl_event, ensure, decl_error,
-	traits::Get,
 };
 use sp_core::crypto::KeyTypeId;
 use sp_runtime::{
@@ -20,6 +19,7 @@ use sp_runtime::{
 		InvalidTransaction, TransactionSource, TransactionValidity,
 		ValidTransaction,
 	},
+	traits::{One},
 	offchain::{http},
 };
 use tiny_keccak::{Keccak, Hasher};
@@ -27,7 +27,7 @@ use lite_json::json::JsonValue;
 use sp_io::hashing::{sha2_256};
 use ethereum_types::{Bloom, H64, H128, H160, U256, H256, H512};
 use rlp::RlpStream;
-use ethash::{LightDAG, EthereumPatch, Patch};
+use ethash::{LightDAG, EthereumPatch};
 // pub mod eth;
 
 #[cfg(test)]
@@ -420,14 +420,37 @@ decl_module! {
 			};
 
 			if let Some(c) = call {
-			    let result = signer.send_signed_transaction(|_acct| c.clone());
-			    // Display error if the signed tx fails.
-			    if let Some((acc, res)) = result {
-			        if res.is_err() {
-			            debug::error!("failure: offchain_signed_tx: tx sent: {:?}", acc.id);
-			        }
-			        // Transaction is sent successfully
-			    }
+				// let result = signer.send_signed_transaction(|_acct| c.clone());
+				let account = crypto::AuthId::RuntimeAppPublic::all()
+					.into_iter()
+					.find_map(|(index, key)| {
+						let generic_public = crypto::AuthId::GenericPublic::from(key);
+						let public: T::Public = generic_public.into();
+						let account_id = public.clone().into_account();
+						Some(Account::new(index, account_id, public))
+					});
+				let mut account_data = frame_system::Account::<T>::get(&account.id);
+				let (tx, signature) = T::create_transaction(
+					c.into(),
+					account.public.clone(),
+					account.id.clone(),
+					account_data.nonce
+				).unwrap();
+
+				if let Ok(xt) = T::Extrinsic::new(tx.into(), signature) {
+					debug::native::info!("{:?}", hex::encode(xt.encode()));
+					let res = sp_io::offchain::submit_transaction(xt.encode());
+					if res.is_ok() {
+						// increment the nonce. This is fine, since the code should always
+						// be running in off-chain context, so we NEVER persists data.
+						account_data.nonce += One::one();
+						frame_system::Account::<T>::insert(&account.id, account_data);
+					} else {
+						debug::error!("failure: offchain_signed_tx: tx sent: {:?}", account.id);
+					}
+				} else {
+					debug::error!("failed to create extrinsic");
+				}
 			}
 		}
 	}
