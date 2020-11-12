@@ -12,7 +12,6 @@ use frame_system::{
 };
 use frame_support::{
 	debug, decl_module, decl_storage, decl_event, ensure, decl_error,
-	traits::Get,
 };
 use sp_core::crypto::KeyTypeId;
 use sp_runtime::{
@@ -27,7 +26,7 @@ use lite_json::json::JsonValue;
 use sp_io::hashing::{sha2_256};
 use ethereum_types::{Bloom, H64, H128, H160, U256, H256, H512};
 use rlp::RlpStream;
-use ethash::{LightDAG, EthereumPatch, Patch};
+use ethash::{LightDAG, EthereumPatch};
 // pub mod eth;
 
 #[cfg(test)]
@@ -396,12 +395,12 @@ decl_module! {
 			let rlp_header: Vec<u8> = stream.out();
 			let signer = Signer::<T, T::AuthorityId>::any_account();
 
-			let call = if Self::initialized() {
-				debug::native::info!("Adding header #: {:?}!", header.number);
-				Some(Call::add_block_header(rlp_header.clone(), cache))
-			} else {
-				let latest_block_number = Self::last_block_number();
-				if U256::from(header.number) > latest_block_number {
+			let latest_block_number = Self::last_block_number();
+			let call = if U256::from(header.number) > latest_block_number {
+				if Self::initialized() {
+					debug::native::info!("Adding header #: {:?}!", header.number);
+					Some(Call::add_block_header(rlp_header.clone(), cache))
+				} else {
 					debug::native::info!("Initializing with header #: {:?}!", header.number);
 					let dags_start_epoch: u64 = header.number / 30000;
 					Some(Call::init(
@@ -413,10 +412,10 @@ decl_module! {
 						U256::from(10),
 						None,
 					))
-				} else {
-					debug::native::info!("Skipping adding #: {:?}, already added!", header.number);
-					None
 				}
+			} else {
+				debug::native::info!("Skipping adding #: {:?}, already added!", header.number);
+				None
 			};
 
 			if let Some(c) = call {
