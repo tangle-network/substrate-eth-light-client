@@ -12,7 +12,6 @@ use frame_system::{
 };
 use frame_support::{
 	debug, decl_module, decl_storage, decl_event, ensure, decl_error,
-	traits::Get,
 };
 use sp_core::crypto::KeyTypeId;
 use sp_runtime::{
@@ -22,18 +21,19 @@ use sp_runtime::{
 	},
 	offchain::{http},
 };
-use tiny_keccak::{Keccak, Hasher};
+
 use lite_json::json::JsonValue;
-use sp_io::hashing::{sha2_256};
+use sp_io::hashing::{sha2_256, keccak_256};
 use ethereum_types::{Bloom, H64, H128, H160, U256, H256, H512};
 use rlp::RlpStream;
-use ethash::{LightDAG, EthereumPatch, Patch};
-// pub mod eth;
+use ethash::{LightDAG, EthereumPatch};
 
+mod types;
+use types::*;
+
+mod prover;
 #[cfg(test)]
 mod tests;
-mod types;
-mod prover;
 
 pub const UNSIGNED_TXS_PRIORITY: u64 = 100;
 
@@ -237,11 +237,10 @@ decl_module! {
 		pub fn add_block_header(
 			origin,
 			block_header: Vec<u8>,
-			cache: Vec<u8>,
+			dag_nodes: Vec<DoubleNodeWithMerkleProof>,
 		) {
 			let _signer = ensure_signed(origin)?;
 			let header: types::BlockHeader = rlp::decode(block_header.as_slice()).unwrap();
-			let l_dag = DAG::from_cache(cache, header.number.into());
 			if let Some(trusted_signer) = Self::trusted_signer() {
 				ensure!(
 					_signer == trusted_signer,
@@ -251,7 +250,7 @@ decl_module! {
 				let prev = Self::headers(header.parent_hash)
 					.expect("Parent header should be present to add a new header");
 				ensure!(
-					Self::verify_header(header.clone(), prev.clone(), l_dag),
+					Self::verify_header(header.clone(), prev.clone(), dag_nodes),
 					"The header is not valid"
 				);
 			}
@@ -397,26 +396,26 @@ decl_module! {
 			let signer = Signer::<T, T::AuthorityId>::any_account();
 
 			let call = if Self::initialized() {
-				debug::native::info!("Adding header #: {:?}!", header.number);
-				Some(Call::add_block_header(rlp_header.clone(), cache))
-			} else {
-				let latest_block_number = Self::last_block_number();
-				if U256::from(header.number) > latest_block_number {
-					debug::native::info!("Initializing with header #: {:?}!", header.number);
-					let dags_start_epoch: u64 = header.number / 30000;
-					Some(Call::init(
-						dags_start_epoch,
-						vec![],
-						rlp_header.clone(),
-						U256::from(30),
-						U256::from(10),
-						U256::from(10),
-						None,
-					))
+				if U256::from(header.number) > Self::last_block_number() {
+					let proof = [DoubleNodeWithMerkleProof::new()].to_vec();
+					debug::native::info!("Adding header #: {:?}!", header.number);
+					Some(Call::add_block_header(rlp_header.clone(), proof))
 				} else {
 					debug::native::info!("Skipping adding #: {:?}, already added!", header.number);
 					None
 				}
+			} else {
+				debug::native::info!("Initializing with header #: {:?}!", header.number);
+				let dags_start_epoch: u64 = header.number / 30000;
+				Some(Call::init(
+					dags_start_epoch,
+					vec![],
+					rlp_header.clone(),
+					U256::from(30),
+					U256::from(10),
+					U256::from(10),
+					None,
+				))
 			};
 
 			if let Some(c) = call {
@@ -569,9 +568,15 @@ impl<T: Trait> Module<T> {
 	fn verify_header(
 		header: types::BlockHeader,
 		prev: types::BlockHeader,
-		dag: LightDAG<EthereumPatch>,
+		dag_nodes: Vec<DoubleNodeWithMerkleProof>,
 	) -> bool {
-		let (_mix_hash, result) = dag.hashimoto(header.partial_hash.unwrap().0.into(), header.nonce.0.into());
+		let (_mix_hash, result) = Self::hashimoto_merkle(
+			header.partial_hash.unwrap(),
+			header.nonce,
+			U256::from(header.number),
+			&dag_nodes,
+		);
+
 		let five_thousand = match U256::from_dec_str("5000") {
 			Ok(r) => r,
 			Err(_) => panic!("Invalid decimal conversion"),
@@ -593,6 +598,53 @@ impl<T: Trait> Module<T> {
 			&& header.number == prev.number + 1
 			&& header.parent_hash == prev.hash.unwrap()
 			&& header.extra_data.len() <= 32
+	}
+
+	/// Verify merkle paths to the DAG nodes.
+	fn hashimoto_merkle(
+		header_hash: H256,
+		nonce: H64,
+		header_number: U256,
+		nodes: &[DoubleNodeWithMerkleProof],
+	) -> (H256, H256) {
+		<VerificationIndex>::set(0);
+        // Check that we have the expected number of nodes with proofs
+        // const MIXHASHES: usize = MIX_BYTES / HASH_BYTES;
+        // if nodes.len() != MIXHASHES * ACCESSES / 2 {
+        //     return Err(Error::UnexpectedNumberOfNodes);
+        // }
+    
+        let epoch = header_number.as_u64() / EPOCH_LENGTH;
+        // Reuse single Merkle root across all the proofs
+        let merkle_root = Self::dag_merkle_root(epoch);
+		let pair = ethash::hashimoto_with_hasher(
+			header_hash.0.into(),
+			nonce.0.into(),
+			ethash::get_full_size(epoch as usize),
+			|offset| {
+				let idx = Self::verification_index() as usize;
+				<VerificationIndex>::set(Self::verification_index() + 1);
+
+				// Each two nodes are packed into single 128 bytes with Merkle proof
+				let node = &nodes[idx as usize / 2];
+				if idx % 2 == 0 && Self::validate_ethash() {
+					// Divide by 2 to adjust offset for 64-byte words instead of 128-byte
+					if let Ok(computed_root) = node.apply_merkle_proof((offset / 2) as u64) {
+						assert_eq!(merkle_root, computed_root);
+					}
+				};
+
+                // Reverse each 32 bytes for ETHASH compatibility
+                let mut data = node.dag_nodes[idx % 2].0;
+                data[..32].reverse();
+                data[32..].reverse();
+                data.into()
+			},
+            keccak_256,
+            types::keccak_512,
+		);
+
+		(H256(pair.0.into()), H256(pair.1.into()))
 	}
 
 	fn fetch_block_header() -> Result<types::BlockHeader, http::Error> {
@@ -619,6 +671,30 @@ impl<T: Trait> Module<T> {
 		let val: JsonValue = lite_json::parse_json(&body_str).unwrap();
 		let header: types::BlockHeader = Self::json_to_rlp(val);
 		Ok(header)
+	}
+
+	fn fetch_proof(rlp_header: Vec<u8>) -> Result<Vec<u8>, http::Error> {
+		// Make a post request to an eth chain
+		let request: http::Request<Vec<&[u8]>> = http::Request::post(
+			"http://localhost:8080/proof",
+			[ &rlp_header[..] ].to_vec(),
+		);
+		let pending = request.send().unwrap();
+
+		// wait indefinitely for response (TODO: timeout)
+		let mut response = pending.wait().unwrap();
+		let headers = response.headers().into_iter();
+		assert_eq!(headers.current(), None);
+
+		// and collect the body
+		let body = response.body().collect::<Vec<u8>>();
+		let body_str = sp_std::str::from_utf8(&body).map_err(|_| {
+			debug::warn!("No UTF8 body");
+			http::Error::Unknown
+		}).unwrap();
+		// decode JSON into object
+		let _val: JsonValue = lite_json::parse_json(&body_str).unwrap();
+		Ok(vec![])
 	}
 
 	pub fn rlp_append(header: types::BlockHeader, stream: &mut RlpStream) {
@@ -819,7 +895,7 @@ impl<T: Trait> frame_support::unsigned::ValidateUnsigned for Module<T> {
 				_num_confirmations,
 				_trusted_signer,
 			) => valid_tx(b"init".to_vec()),
-			Call::add_block_header(_header, _cache) => valid_tx(b"add_block_header".to_vec()),
+			Call::add_block_header(_header, _proof) => valid_tx(b"add_block_header".to_vec()),
 			// -- snip --
 			_ => InvalidTransaction::Call.into(),
 		}

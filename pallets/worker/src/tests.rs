@@ -1,3 +1,4 @@
+
 use crate::*;
 use codec::{Encode, Decode};
 use frame_support::{
@@ -218,39 +219,38 @@ impl From<BlockWithProofsRaw> for BlockWithProofs {
 	}
 }
 
-// impl BlockWithProofs {
-// 	fn combine_dag_h256_to_h512(elements: Vec<H256>) -> Vec<H512> {
-// 		elements
-// 			.iter()
-// 			.zip(elements.iter().skip(1))
-// 			.enumerate()
-// 			.filter(|(i, _)| i % 2 == 0)
-// 			.map(|(_, (a, b))| {
-// 				let mut buffer = [0u8; 64];
-// 				buffer[..32].copy_from_slice(&(a.0));
-// 				buffer[32..].copy_from_slice(&(b.0));
-// 				H512(buffer.into())
-// 			})
-// 			.collect()
-// 	}
+impl BlockWithProofs {
+	fn combine_dag_h256_to_h512(elements: Vec<H256>) -> Vec<H512> {
+		elements
+			.iter()
+			.zip(elements.iter().skip(1))
+			.enumerate()
+			.filter(|(i, _)| i % 2 == 0)
+			.map(|(_, (a, b))| {
+				let mut buffer = [0u8; 64];
+				buffer[..32].copy_from_slice(&(a.0));
+				buffer[32..].copy_from_slice(&(b.0));
+				H512(buffer.into())
+			})
+			.collect()
+	}
 
-// 	pub fn to_double_node_with_merkle_proof_vec(&self) -> Vec<(Vec<H512>, Vec<H128>)> {
-// 		let h512s = Self::combine_dag_h256_to_h512(self.elements.clone());
-// 		h512s
-// 			.iter()
-// 			.zip(h512s.iter().skip(1))
-// 			.enumerate()
-// 			.filter(|(i, _)| i % 2 == 0)
-// 			.map(|(i, (a, b))| {
-// 				let dag_nodes = vec![*a, *b];
-// 				let proof = self.merkle_proofs
-// 					[i / 2 * self.proof_length as usize..(i / 2 + 1) * self.proof_length as usize]
-// 					.to_vec();
-// 				(dag_nodes, proof)
-// 			})
-// 			.collect()
-// 	}
-// }
+	pub fn to_double_node_with_merkle_proof_vec(&self) -> Vec<types::DoubleNodeWithMerkleProof> {
+		let h512s = Self::combine_dag_h256_to_h512(self.elements.clone());
+		h512s
+			.iter()
+			.zip(h512s.iter().skip(1))
+			.enumerate()
+			.filter(|(i, _)| i % 2 == 0)
+			.map(|(i, (a, b))| DoubleNodeWithMerkleProof {
+                dag_nodes: [*a, *b],
+                proof: self.merkle_proofs
+                    [i / 2 * self.proof_length as usize..(i / 2 + 1) * self.proof_length as usize]
+                    .to_vec(),
+            })
+			.collect()
+	}
+}
 
 fn catch_unwind_silent<F: FnOnce() -> R + panic::UnwindSafe, R>(f: F) -> std::thread::Result<R> {
 	let prev_hook = panic::take_hook();
@@ -266,7 +266,7 @@ fn read_roots_collection() -> RootsCollection {
 
 fn read_roots_collection_raw() -> RootsCollectionRaw {
 	serde_json::from_reader(
-		std::fs::File::open(std::path::Path::new("./src/data/dag_merkle_roots.json")).unwrap(),
+		std::fs::File::open(std::path::Path::new("./data/dag_merkle_roots.json")).unwrap(),
 	)
 	.unwrap()
 }
@@ -479,7 +479,7 @@ fn add_blocks_2_and_3() {
 		let (blocks, hashes) = get_blocks(&WEB3RS, 2, 4);
 
 		// $ ../ethrelay/ethashproof/cmd/relayer/relayer 3
-		let blocks_with_proofs: Vec<BlockWithProofs> = ["./src/data/2.json", "./src/data/3.json"]
+		let blocks_with_proofs: Vec<BlockWithProofs> = ["./data/2.json", "./data/3.json"]
 			.iter()
 			.map(|filename| read_block((&filename).to_string()))
 			.collect();
@@ -505,7 +505,7 @@ fn add_blocks_2_and_3() {
 			assert_ok!(Example::add_block_header(
 				Origin::signed(pair.public()),
 				block,
-				l_dag.cache.clone(),
+				_proof.to_double_node_with_merkle_proof_vec(),
 			));
 		}
 
@@ -530,7 +530,7 @@ fn add_400000_block_only() {
 		// Proof length: 24
 		// [400000.json]
 
-		let block_with_proof = read_block("./src/data/400000.json".to_string());
+		let block_with_proof = read_block("./data/400000.json".to_string());
 		assert_ok!(Example::init(
 			Origin::signed(pair.public()),
 			400_000 / 30000,
@@ -557,7 +557,7 @@ fn add_two_blocks_from_8996776() {
 
 		// $ ../ethrelay/ethashproof/cmd/relayer/relayer 8996777
 		let blocks_with_proofs: Vec<BlockWithProofs> =
-			["./src/data/8996776.json", "./src/data/8996777.json"]
+			["./data/8996776.json", "./data/8996777.json"]
 				.iter()
 				.map(|filename| read_block((&filename).to_string()))
 				.collect();
@@ -583,7 +583,7 @@ fn add_two_blocks_from_8996776() {
 			assert_ok!(Example::add_block_header(
 				Origin::signed(pair.public()),
 				block,
-				l_dag.cache.clone(),
+				_proof.to_double_node_with_merkle_proof_vec(),
 			));
 		}
 
@@ -616,7 +616,7 @@ fn add_2_blocks_from_400000() {
 		// [400001.json]
 
 		let blocks_with_proofs: Vec<BlockWithProofs> =
-			["./src/data/400000.json", "./src/data/400001.json"]
+			["./data/400000.json", "./data/400001.json"]
 				.iter()
 				.map(|filename| read_block((&filename).to_string()))
 				.collect();
@@ -642,7 +642,7 @@ fn add_2_blocks_from_400000() {
 			assert_ok!(Example::add_block_header(
 				Origin::signed(pair.public()),
 				block,
-				l_dag.cache.clone(),
+				_proof.to_double_node_with_merkle_proof_vec(),
 			));
 		}
 
