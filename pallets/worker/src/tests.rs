@@ -1,4 +1,6 @@
 
+use std::fs::File;
+use std::io::Write;
 use crate::*;
 use codec::{Encode, Decode};
 use frame_support::{
@@ -39,32 +41,30 @@ impl_outer_origin! {
 // configuration traits of modules we want to use.
 #[derive(Clone, Eq, PartialEq, Encode, Decode)]
 pub struct Test;
+
 parameter_types! {
 	pub const BlockHashCount: u64 = 250;
-	pub const MaximumBlockWeight: Weight = 1024;
-	pub const MaximumBlockLength: u32 = 2 * 1024;
-	pub const AvailableBlockRatio: Perbill = Perbill::one();
+	pub BlockWeights: frame_system::limits::BlockWeights =
+		frame_system::limits::BlockWeights::simple_max(1024);
+	pub const MinimumPeriod: u64 = 1;
 }
-impl frame_system::Trait for Test {
+
+impl frame_system::Config for Test {
 	type BaseCallFilter = ();
+	type BlockWeights = ();
+	type BlockLength = ();
+	type DbWeight = ();
 	type Origin = Origin;
-	type Call = ();
 	type Index = u64;
 	type BlockNumber = u64;
+	type Call = ();
 	type Hash = H256;
-	type Hashing = BlakeTwo256;
+	type Hashing = ::sp_runtime::traits::BlakeTwo256;
 	type AccountId = sp_core::sr25519::Public;
 	type Lookup = IdentityLookup<Self::AccountId>;
 	type Header = Header;
 	type Event = ();
 	type BlockHashCount = BlockHashCount;
-	type MaximumBlockWeight = MaximumBlockWeight;
-	type DbWeight = ();
-	type BlockExecutionWeight = ();
-	type ExtrinsicBaseWeight = ();
-	type MaximumExtrinsicWeight = MaximumBlockWeight;
-	type MaximumBlockLength = MaximumBlockLength;
-	type AvailableBlockRatio = AvailableBlockRatio;
 	type Version = ();
 	type PalletInfo = ();
 	type AccountData = ();
@@ -107,7 +107,7 @@ parameter_types! {
 	pub const UnsignedPriority: u64 = 1 << 20;
 }
 
-impl Trait for Test {
+impl Config for Test {
 	type Event = ();
 	type AuthorityId = crypto::AuthId;
 	type Call = Call<Test>;
@@ -271,6 +271,16 @@ fn read_roots_collection_raw() -> RootsCollectionRaw {
 	.unwrap()
 }
 
+fn write_file() -> std::result::Result<(), std::io::Error> {
+    let mut file = File::create("elts.txt")?;
+    for i in read_roots_collection().dag_merkle_roots.iter() {
+    	// println!("{:?}", i.as_bytes());
+   		write!(file, "{:?}", i.as_bytes())?;
+    }
+    
+    Ok(())
+}
+
 // Wish to avoid this code and use web3+rlp libraries directly
 fn rlp_append<TX>(header: &Block<TX>, stream: &mut RlpStream) {
 	stream.begin_list(15);
@@ -334,21 +344,21 @@ fn read_block_raw(filename: String) -> BlockWithProofsRaw {
 }
 
 
-#[test]
-fn should_make_http_call_and_parse_result() {
-	let (offchain, state) = testing::TestOffchainExt::new();
-	let mut t = sp_io::TestExternalities::default();
-	t.register_extension(OffchainExt::new(offchain));
+// #[test]
+// fn should_make_http_call_and_parse_result() {
+// 	let (offchain, state) = testing::TestOffchainExt::new();
+// 	let mut t = sp_io::TestExternalities::default();
+// 	t.register_extension(OffchainExt::new(offchain));
 
-	set_block_response(&mut state.write());
+// 	set_block_response(&mut state.write());
 
-	t.execute_with(|| {
-		// when
-		let number = Example::fetch_block_header().unwrap().number;
-		// then
-		assert_eq!(number, 8934751);
-	});
-}
+// 	t.execute_with(|| {
+// 		// when
+// 		let number = Example::fetch_block_header().unwrap().number;
+// 		// then
+// 		assert_eq!(number, 8934751);
+// 	});
+// }
 
 #[test]
 fn should_make_infura_call_and_parse_result() {

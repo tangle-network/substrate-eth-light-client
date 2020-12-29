@@ -2,7 +2,7 @@
 
 use sp_runtime::offchain::storage::StorageValueRef;
 use sp_std::prelude::*;
-use codec::{Encode, Decode};
+use  codec::{Encode, Decode};
 use frame_system::{
 	self as system, ensure_signed,
 	offchain::{
@@ -30,6 +30,9 @@ use ethash::{LightDAG, EthereumPatch};
 
 mod types;
 use types::*;
+
+pub mod roots;
+pub use roots::roots;
 
 mod prover;
 #[cfg(test)]
@@ -393,8 +396,7 @@ decl_module! {
 			let mut stream = RlpStream::new();
 			Self::rlp_append(header.clone(), &mut stream);
 			let rlp_header: Vec<u8> = stream.out();
-			let data = Self::fetch_proof(rlp_header.clone()).unwrap();
-			debug::native::info!("Data {:?}", data);
+
 			let signer = Signer::<T, T::AuthorityId>::any_account();
 
 			let call = if Self::initialized() {
@@ -411,7 +413,7 @@ decl_module! {
 				let dags_start_epoch: u64 = header.number / 30000;
 				Some(Call::init(
 					dags_start_epoch,
-					vec![],
+					roots(),
 					rlp_header.clone(),
 					U256::from(30),
 					U256::from(10),

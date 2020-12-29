@@ -1305,6 +1305,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ethash"
+version = "0.4.1"
+source = "git+https://github.com/edgeware-builders/ethash?branch=rust-proof#d5c5a8070ac6c19bcd5643d95dfe0063a0c83c50"
+dependencies = [
+ "byteorder",
+ "ethereum-types 0.8.0",
+ "rlp",
+ "sha3 0.8.2",
+]
+
+[[package]]
 name = "ethbloom"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3809,7 +3820,7 @@ dependencies = [
 name = "node-template-runtime"
 version = "2.0.0"
 dependencies = [
- "ethash",
+ "ethash 0.4.1 (git+https://github.com/edgeware-builders/ethash)",
  "frame-benchmarking",
  "frame-executive",
  "frame-support",
@@ -4217,7 +4228,7 @@ dependencies = [
 name = "pallet-worker"
 version = "2.0.0"
 dependencies = [
- "ethash",
+ "ethash 0.4.1 (git+https://github.com/edgeware-builders/ethash?branch=rust-proof)",
  "ethereum",
  "ethereum-types 0.9.2",
  "frame-support",
