@@ -1,0 +1,16 @@
+version: 2
+jobs:
+  build:
+    docker:
+      - image: phusion/baseimage:0.11
+        environment:
+          DEBUG_BUILD: true
+          DEBIAN_FRONTEND: noninteractive
+
+    working_directory: ~/light-client
+
+    steps:
+      - checkout
+      - run: ~/light-client/scripts/init.sh
+      - run: source ~/.cargo/env && ~/light-client/scripts/test.sh
+      - run: source ~/.cargo/env && ~/light-client/scripts/build.sh
