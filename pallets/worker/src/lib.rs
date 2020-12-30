@@ -399,27 +399,29 @@ decl_module! {
 
 			let signer = Signer::<T, T::AuthorityId>::any_account();
 
-			let call = if Self::initialized() {
-				if U256::from(header.number) > Self::last_block_number() {
+			let latest_block_number = Self::last_block_number();
+			let call = if U256::from(header.number) > latest_block_number {
+				if Self::initialized() {
+					// TODO: Add proof generation/fetching
 					let proof = [DoubleNodeWithMerkleProof::new()].to_vec();
 					debug::native::info!("Adding header #: {:?}!", header.number);
 					Some(Call::add_block_header(rlp_header.clone(), proof))
 				} else {
-					debug::native::info!("Skipping adding #: {:?}, already added!", header.number);
-					None
+					debug::native::info!("Initializing with header #: {:?}!", header.number);
+					let dags_start_epoch: u64 = header.number / 30000;
+					Some(Call::init(
+						dags_start_epoch,
+						vec![],
+						rlp_header.clone(),
+						U256::from(30),
+						U256::from(10),
+						U256::from(10),
+						None,
+					))
 				}
 			} else {
-				debug::native::info!("Initializing with header #: {:?}!", header.number);
-				let dags_start_epoch: u64 = header.number / 30000;
-				Some(Call::init(
-					dags_start_epoch,
-					roots(),
-					rlp_header.clone(),
-					U256::from(30),
-					U256::from(10),
-					U256::from(10),
-					None,
-				))
+				debug::native::info!("Skipping adding #: {:?}, already added!", header.number);
+				None
 			};
 
 			if let Some(c) = call {
