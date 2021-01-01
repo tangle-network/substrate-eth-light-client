@@ -25,7 +25,7 @@ pub trait Prover {
         expected_root: H256,
         key: Vec<u8>,
         proof: Vec<Vec<u8>>,
-        expected_value: Vec<u8>
+        expected_value: Vec<u8>,
     ) -> bool;
 
     fn _verify_trie_proof(
@@ -52,7 +52,10 @@ impl<T: Config> Prover for Module<T> {
             .collect()
     }
 
-    fn assert_ethclient_hash(block_number: u64, expected_block_hash: H256) -> bool {
+    fn assert_ethclient_hash(
+        block_number: u64,
+        expected_block_hash: H256,
+    ) -> bool {
         match Self::block_hash_safe(block_number) {
             Some(hash) => hash == expected_block_hash,
             None => false,
@@ -67,9 +70,12 @@ impl<T: Config> Prover for Module<T> {
         header_data: Vec<u8>,
         proof: Vec<Vec<u8>>,
     ) -> bool {
-        let log_entry: ethereum::Log = rlp::decode(log_entry_data.as_slice()).unwrap();
-        let receipt: ethereum::Receipt = rlp::decode(receipt_data.as_slice()).unwrap();
-        let header: ethereum::Header = rlp::decode(header_data.as_slice()).unwrap();
+        let log_entry: ethereum::Log =
+            rlp::decode(log_entry_data.as_slice()).unwrap();
+        let receipt: ethereum::Receipt =
+            rlp::decode(receipt_data.as_slice()).unwrap();
+        let header: ethereum::Header =
+            rlp::decode(header_data.as_slice()).unwrap();
 
         // Verify log_entry included in receipt
         if receipt.logs[log_index as usize] == log_entry {
@@ -95,7 +101,7 @@ impl<T: Config> Prover for Module<T> {
         expected_root: H256,
         key: Vec<u8>,
         proof: Vec<Vec<u8>>,
-        expected_value: Vec<u8>
+        expected_value: Vec<u8>,
     ) -> bool {
         let mut actual_key = vec![];
         for el in key {
@@ -107,7 +113,14 @@ impl<T: Config> Prover for Module<T> {
             }
         }
 
-        Self::_verify_trie_proof(expected_root, actual_key, proof, 0, 0, expected_value)
+        Self::_verify_trie_proof(
+            expected_root,
+            actual_key,
+            proof,
+            0,
+            0,
+            expected_value,
+        )
     }
 
     fn _verify_trie_proof(
@@ -161,7 +174,9 @@ impl<T: Config> Prover for Module<T> {
 
                 let mut trunc_expected_root: [u8; 32] = [0; 32];
                 for i in 0..new_expected_root.len() {
-                    if i == 32 { break; }
+                    if i == 32 {
+                        break;
+                    }
                     trunc_expected_root[i] = new_expected_root[i];
                 }
 
@@ -181,14 +196,17 @@ impl<T: Config> Prover for Module<T> {
         } else if dec.iter().count() == 2 {
             // leaf or extension node
             // get prefix and optional nibble from the first byte
-            let nibbles = Self::extract_nibbles(dec.at(0).unwrap().as_val::<Vec<u8>>().unwrap());
+            let nibbles = Self::extract_nibbles(
+                dec.at(0).unwrap().as_val::<Vec<u8>>().unwrap(),
+            );
             let (prefix, nibble) = (nibbles[0], nibbles[1]);
 
             if prefix == 2 {
                 // even leaf node
                 let key_end = &nibbles[2..];
                 if Self::concat_nibbles(key_end.to_vec()) == &key[key_index..]
-                    && expected_value == dec.at(1).unwrap().as_val::<Vec<u8>>().unwrap()
+                    && expected_value
+                        == dec.at(1).unwrap().as_val::<Vec<u8>>().unwrap()
                 {
                     return true;
                 }
@@ -196,8 +214,10 @@ impl<T: Config> Prover for Module<T> {
                 // odd leaf node
                 let key_end = &nibbles[2..];
                 if nibble == key[key_index]
-                    && Self::concat_nibbles(key_end.to_vec()) == &key[key_index + 1..]
-                    && expected_value == dec.at(1).unwrap().as_val::<Vec<u8>>().unwrap()
+                    && Self::concat_nibbles(key_end.to_vec())
+                        == &key[key_index + 1..]
+                    && expected_value
+                        == dec.at(1).unwrap().as_val::<Vec<u8>>().unwrap()
                 {
                     return true;
                 }
@@ -208,11 +228,13 @@ impl<T: Config> Prover for Module<T> {
                 if Self::concat_nibbles(shared_nibbles.to_vec())
                     == &key[key_index..key_index + extension_length]
                 {
-
-                    let new_expected_root = dec.at(1).unwrap().as_val::<Vec<u8>>().unwrap();
+                    let new_expected_root =
+                        dec.at(1).unwrap().as_val::<Vec<u8>>().unwrap();
                     let mut trunc_expected_root: [u8; 32] = [0; 32];
                     for i in 0..new_expected_root.len() {
-                        if i == 32 { break; }
+                        if i == 32 {
+                            break;
+                        }
                         trunc_expected_root[i] = new_expected_root[i];
                     }
 
@@ -233,10 +255,13 @@ impl<T: Config> Prover for Module<T> {
                     && Self::concat_nibbles(shared_nibbles.to_vec())
                         == &key[key_index + 1..key_index + extension_length]
                 {
-                    let new_expected_root = dec.at(1).unwrap().as_val::<Vec<u8>>().unwrap();
+                    let new_expected_root =
+                        dec.at(1).unwrap().as_val::<Vec<u8>>().unwrap();
                     let mut trunc_expected_root: [u8; 32] = [0; 32];
                     for i in 0..new_expected_root.len() {
-                        if i == 32 { break; }
+                        if i == 32 {
+                            break;
+                        }
                         trunc_expected_root[i] = new_expected_root[i];
                     }
                     return Self::_verify_trie_proof(
