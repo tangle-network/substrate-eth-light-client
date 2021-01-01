@@ -2,7 +2,7 @@
 
 use sp_runtime::offchain::storage::StorageValueRef;
 use sp_std::prelude::*;
-use codec::{Encode, Decode};
+use  codec::{Encode, Decode};
 use frame_system::{
 	self as system, ensure_signed,
 	offchain::{
@@ -30,6 +30,9 @@ use ethash::{LightDAG, EthereumPatch};
 
 mod types;
 use types::*;
+
+pub mod roots;
+pub use roots::roots;
 
 mod prover;
 #[cfg(test)]
@@ -81,12 +84,12 @@ impl <T: SigningTypes> SignedPayload<T> for Payload<T::Public> {
 }
 
 /// This pallet's configuration trait
-pub trait Trait: system::Trait + CreateSignedTransaction<Call<Self>> {
+pub trait Config: system::Config + CreateSignedTransaction<Call<Self>> {
 	/// The identifier type for an offchain worker.
 	type AuthorityId: AppCrypto<Self::Public, Self::Signature>;
 
 	/// The overarching event type.
-	type Event: From<Event<Self>> + Into<<Self as frame_system::Trait>::Event>;
+	type Event: From<Event<Self>> + Into<<Self as frame_system::Config>::Event>;
 	/// The overarching dispatch call type.
 	type Call: From<Call<Self>>;
 }
@@ -114,7 +117,7 @@ pub fn cross_boundary(val: U256) -> U256 {
 }
 
 decl_error! {
-	pub enum Error for Module<T: Trait> {
+	pub enum Error for Module<T: Config> {
 		// Error returned when not sure which ocw function to executed
 		UnknownOffchainMux,
 
@@ -134,7 +137,7 @@ decl_error! {
 }
 
 decl_storage! {
-	trait Store for Module<T: Trait> as WorkerModule {
+	trait Store for Module<T: Config> as WorkerModule {
 		pub ValidateETHash get(fn validate_ethash): bool;
 		/// The epoch from which the DAG merkle roots start.
 		pub DAGsStartEpoch get(fn dags_start_epoch): Option<u64>;
@@ -178,13 +181,13 @@ decl_storage! {
 }
 
 decl_event!(
-	pub enum Event<T> where AccountId = <T as frame_system::Trait>::AccountId {
+	pub enum Event<T> where AccountId = <T as frame_system::Config>::AccountId {
 		NewHeader(u32, AccountId),
 	}
 );
 
 decl_module! {
-	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
+	pub struct Module<T: Config> for enum Call where origin: T::Origin {
 		// // Errors must be initialized if they are used by the pallet.
 		// type Error = Error<T>;
 
@@ -393,29 +396,32 @@ decl_module! {
 			let mut stream = RlpStream::new();
 			Self::rlp_append(header.clone(), &mut stream);
 			let rlp_header: Vec<u8> = stream.out();
+
 			let signer = Signer::<T, T::AuthorityId>::any_account();
 
-			let call = if Self::initialized() {
-				if U256::from(header.number) > Self::last_block_number() {
+			let latest_block_number = Self::last_block_number();
+			let call = if U256::from(header.number) > latest_block_number {
+				if Self::initialized() {
+					// TODO: Add proof generation/fetching
 					let proof = [DoubleNodeWithMerkleProof::new()].to_vec();
 					debug::native::info!("Adding header #: {:?}!", header.number);
 					Some(Call::add_block_header(rlp_header.clone(), proof))
 				} else {
-					debug::native::info!("Skipping adding #: {:?}, already added!", header.number);
-					None
+					debug::native::info!("Initializing with header #: {:?}!", header.number);
+					let dags_start_epoch: u64 = header.number / 30000;
+					Some(Call::init(
+						dags_start_epoch,
+						vec![],
+						rlp_header.clone(),
+						U256::from(30),
+						U256::from(10),
+						U256::from(10),
+						None,
+					))
 				}
 			} else {
-				debug::native::info!("Initializing with header #: {:?}!", header.number);
-				let dags_start_epoch: u64 = header.number / 30000;
-				Some(Call::init(
-					dags_start_epoch,
-					vec![],
-					rlp_header.clone(),
-					U256::from(30),
-					U256::from(10),
-					U256::from(10),
-					None,
-				))
+				debug::native::info!("Skipping adding #: {:?}, already added!", header.number);
+				None
 			};
 
 			if let Some(c) = call {
@@ -448,7 +454,7 @@ fn hex_to_bytes(v: &Vec<char>) -> Result<Vec<u8>, hex::FromHexError> {
 	hex::decode(&vec_u8[..])
 }
 
-impl<T: Trait> Module<T> {
+impl<T: Config> Module<T> {
 	pub fn initialized() -> bool {
 		Self::dags_start_epoch().is_some()
 	}
@@ -874,7 +880,7 @@ impl<T: Trait> Module<T> {
 	}
 }
 
-impl<T: Trait> frame_support::unsigned::ValidateUnsigned for Module<T> {
+impl<T: Config> frame_support::unsigned::ValidateUnsigned for Module<T> {
 	type Call = Call<T>;
 
 	fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {

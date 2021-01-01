@@ -45,12 +45,12 @@ pallet-indices = { version = "2.0.0", default-features = false, git = "https://g
 frame-benchmarking = { version = "2.0.0", default-features = false, git = "https://github.com/paritytech/substrate.git", optional = true }
 frame-system-benchmarking = { version = "2.0.0", default-features = false, git = "https://github.com/paritytech/substrate.git", optional = true }
 hex-literal = { version = "0.3.1", optional = true }
-
+ethash = { git = "https://github.com/edgeware-builders/ethash.git", default-features = false }
 sp-application-crypto = { git = "https://github.com/paritytech/substrate.git", default-features = false }
 pallet-worker = { version = "2.0.0", default-features = false, path = "../pallets/worker" }
 
 [build-dependencies]
-wasm-builder-runner = { package = "substrate-wasm-builder-runner", git = "https://github.com/paritytech/substrate.git" }
+substrate-wasm-builder = { git = "https://github.com/paritytech/substrate.git" }
 
 [features]
 default = ["std"]
@@ -82,6 +82,7 @@ std = [
 	"frame-system/std",
 	"frame-system-rpc-runtime-api/std",
 	"pallet-worker/std",
+	"ethash/std",
 ]
 runtime-benchmarks = [
 	"sp-runtime/runtime-benchmarks",

@@ -38,7 +38,7 @@ pub trait Prover {
     ) -> bool;
 }
 
-impl<T: Trait> Prover for Module<T> {
+impl<T: Config> Prover for Module<T> {
     fn extract_nibbles(a: Vec<u8>) -> Vec<u8> {
         a.iter().flat_map(|b| vec![b >> 4, b & 0x0F]).collect()
     }
