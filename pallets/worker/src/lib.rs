@@ -1,4 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![allow(clippy::too_many_arguments)]
 
 use codec::{Decode, Encode};
 use frame_support::{
@@ -13,6 +14,7 @@ use frame_system::{
 };
 use sp_core::crypto::KeyTypeId;
 use sp_runtime::offchain::storage::StorageValueRef;
+use sp_runtime::offchain::storage_lock::{StorageLock, Time};
 use sp_runtime::{
     offchain::http,
     transaction_validity::{
@@ -229,7 +231,7 @@ decl_module! {
             let header_hash = header.hash.unwrap();
             let header_number = U256::from(header.number);
 
-            <BestHeaderHash>::set(header_hash.clone());
+            <BestHeaderHash>::set(header_hash);
             <AllHeaderHashes>::insert(header_number, vec![header_hash]);
             <CanonicalHeaderHashes>::insert(header_number, header_hash);
             <Headers>::insert(header_hash, header.clone());
@@ -260,7 +262,7 @@ decl_module! {
                 let prev = Self::headers(header.parent_hash)
                     .expect("Parent header should be present to add a new header");
                 ensure!(
-                    Self::verify_header(header.clone(), prev.clone(), dag_nodes),
+                    Self::verify_header(header.clone(), prev, dag_nodes),
                     "The header is not valid"
                 );
             }
@@ -285,7 +287,7 @@ decl_module! {
                 if let Some(parent_info) = Self::infos(header.parent_hash) {
                     // Record this header in `all_hashes`.
                     let mut all_hashes = Self::all_header_hashes(header_number);
-                    if all_hashes.len() > 0 {
+                    if !all_hashes.is_empty() {
                         ensure!(all_hashes.iter().any(|x| x == &header_hash), "Header is already known.");
                     }
                     all_hashes.push(header_hash);
@@ -295,7 +297,7 @@ decl_module! {
                     <Headers>::insert(header_hash, header.clone());
                     let info = HeaderInfo {
                         total_difficulty: parent_info.total_difficulty + header.difficulty,
-                        parent_hash: header.parent_hash.clone(),
+                        parent_hash: header.parent_hash,
                         number: header_number,
                     };
                     <Infos>::insert(header_hash, info.clone());
@@ -325,7 +327,7 @@ decl_module! {
                         // Replacing past hashes until we converge into the same parent.
                         // Starting from the parent hash.
                         let mut number = U256::from(header.number) - 1;
-                        let mut current_hash = info.clone().parent_hash;
+                        let mut current_hash = info.parent_hash;
                         loop {
                             if let Some(prev_value) = Self::canonical_header_hashes(number) {
                                 <CanonicalHeaderHashes>::insert(number, current_hash);
@@ -367,6 +369,7 @@ decl_module! {
         fn offchain_worker(block_number: T::BlockNumber) {
             let parent_hash = <system::Module<T>>::block_hash(block_number - 1u32.into());
             debug::native::info!("Current block: {:?} (parent hash: {:?})", block_number, parent_hash);
+
             let header: types::BlockHeader = Self::fetch_block_header().unwrap();
 
             let epoch = (header.number as usize / 30000) as u64;
@@ -386,7 +389,7 @@ decl_module! {
                     let l_dag = DAG::new(header.number.into());
                     debug::native::info!("Finished cache generation!");
                     cache_info.set(&l_dag.cache);
-                    l_dag.cache.clone()
+                    l_dag.cache
                 }
             };
 
@@ -397,7 +400,7 @@ decl_module! {
                 epoch_info.set(&epoch);
                 // regeneate cache and store the dag
                 let l_dag = DAG::new(header.number.into());
-                cache = l_dag.cache.clone();
+                cache = l_dag.cache;
             }
 
             let mut stream = RlpStream::new();
@@ -405,21 +408,65 @@ decl_module! {
             let rlp_header: Vec<u8> = stream.out();
 
             let signer = Signer::<T, T::AuthorityId>::any_account();
-
+            let dataset_info = StorageValueRef::persistent(b"light-client-worker::ethash-dataset");
+            let dataset = match dataset_info.get::<Vec<u8>>() {
+                Some(dataset) => Some(dataset.unwrap()),
+                None => {
+                    // FIXME(shekohex): move this code to a function guarded by std feature.
+                    // so we can only generate the dataset on std supported targets.
+                    debug::native::info!("Generate dataset for stored epoch: {}", stored_epoch);
+                    // lock the storage.
+                    let mut lock = StorageLock::<Time>::new(b"light-client-worker::ethash-dataset");
+                    let maybe_dataset = if let Ok(_guard) = lock.try_lock() {
+                        let dataset_size = ethash::get_full_size(stored_epoch as usize);
+                        let mut dataset = Vec::with_capacity(dataset_size);
+                        dataset.resize(dataset_size, 0u8);
+                        ethash::make_dataset(&mut dataset, &cache);
+                        dataset_info.set(&dataset);
+                        Some(dataset)
+                    } else {
+                        // no work to be done here, until the dataset generation is complete.
+                        None
+                    };
+                    maybe_dataset
+                },
+            };
+            let dataset = match dataset {
+                Some(dataset) => dataset,
+                // this skips the current invocation, as there is another worker is generating the
+                // dataset.
+                None => return
+            };
+            let should_generate_dataset = should_generate_dataset(U256::from(header.number), stored_epoch);
+            debug::native::info!("Should we generate the dataset? {}", should_generate_dataset);
+            if should_generate_dataset {
+                // FIXME(shekohex): lock the storage here to avoid regeneation.
+                // not yet sure how we will swap these and when.
+                let dataset_size = ethash::get_full_size(epoch as usize);
+                let mut dataset = Vec::with_capacity(dataset_size);
+                dataset.resize(dataset_size, 0u8);
+                ethash::make_dataset(&mut dataset, &cache);
+                // TODO(shekohex): save the dataset.
+            }
             let latest_block_number = Self::last_block_number();
             let call = if U256::from(header.number) > latest_block_number {
                 if Self::initialized() {
-                    // TODO: Add proof generation/fetching
+                    // TODO(drewstone): we should convert this proofs to DoubleNodeWithMerkleProof
+                    // but how?
+                    let _tree = ethash::calc_dataset_merkle_proofs(
+                        stored_epoch as usize,
+                        dataset.as_slice(),
+                    );
                     let proof = [DoubleNodeWithMerkleProof::new()].to_vec();
                     debug::native::info!("Adding header #: {:?}!", header.number);
-                    Some(Call::add_block_header(rlp_header.clone(), proof))
+                    Some(Call::add_block_header(rlp_header, proof))
                 } else {
                     debug::native::info!("Initializing with header #: {:?}!", header.number);
                     let dags_start_epoch: u64 = header.number / 30000;
                     Some(Call::init(
                         dags_start_epoch,
                         vec![],
-                        rlp_header.clone(),
+                        rlp_header,
                         U256::from(30),
                         U256::from(10),
                         U256::from(10),
@@ -443,6 +490,18 @@ decl_module! {
             }
         }
     }
+}
+
+fn should_generate_dataset(block_number: U256, stored_epoch: u64) -> bool {
+    const ETH_PATCH_SIZE: u64 = 30_000;
+    const REGENATION_THRESHOLD: u64 = ETH_PATCH_SIZE / 2;
+
+    let current_block_number = block_number.as_u64();
+    let last_block_number = (stored_epoch + 1) * ETH_PATCH_SIZE;
+    let diff = last_block_number
+        .checked_sub(current_block_number)
+        .unwrap_or(REGENATION_THRESHOLD);
+    diff <= REGENATION_THRESHOLD
 }
 
 fn hex_to_bytes(v: &Vec<char>) -> Result<Vec<u8>, hex::FromHexError> {

@@ -1311,8 +1311,12 @@ source = "git+https://github.com/edgeware-builders/ethash?branch=rust-proof#d5c5
 dependencies = [
  "byteorder",
  "ethereum-types 0.8.0",
+ "mrklt",
  "rlp",
+ "rlp-derive",
+ "sha2 0.8.2",
  "sha3 0.8.2",
+ "tiny-keccak 2.0.2",
 ]
 
 [[package]]
@@ -3665,6 +3669,12 @@ name = "more-asserts"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0debeb9fcf88823ea64d64e4a815ab1643f33127d995978e099942ce38f25238"
+
+[[package]]
+name = "mrklt"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3c8113da555aec03cdede06cdd4dca3f94853d0bb73107b4b489ae723f4341c"
 
 [[package]]
 name = "multihash"

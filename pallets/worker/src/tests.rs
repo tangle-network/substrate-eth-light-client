@@ -361,22 +361,6 @@ fn read_block_raw(filename: String) -> BlockWithProofsRaw {
     .unwrap()
 }
 
-// #[test]
-// fn should_make_http_call_and_parse_result() {
-// 	let (offchain, state) = testing::TestOffchainExt::new();
-// 	let mut t = sp_io::TestExternalities::default();
-// 	t.register_extension(OffchainExt::new(offchain));
-
-// 	set_block_response(&mut state.write());
-
-// 	t.execute_with(|| {
-// 		// when
-// 		let number = Example::fetch_block_header().unwrap().number;
-// 		// then
-// 		assert_eq!(number, 8934751);
-// 	});
-// }
-
 #[test]
 fn should_make_infura_call_and_parse_result() {
     let (offchain, state) = testing::TestOffchainExt::new();
@@ -683,4 +667,16 @@ fn add_2_blocks_from_400000() {
         assert_eq!((hashes[0].0), Example::block_hash(400_000).unwrap().0);
         assert_eq!((hashes[1].0), Example::block_hash(400_001).unwrap().0);
     });
+}
+
+#[test]
+fn should_check_for_generate_dataset() {
+    let block_number = U256::from(2);
+    let stored_epoch = block_number.as_u64() / 30_000;
+    assert_eq!(should_generate_dataset(block_number, stored_epoch), false);
+
+    let block_number = U256::from(400_000);
+    let stored_epoch = 0; // last_block_number 30_000
+
+    assert_eq!(should_generate_dataset(block_number, stored_epoch), true);
 }
