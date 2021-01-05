@@ -494,14 +494,14 @@ decl_module! {
 
 fn should_generate_dataset(block_number: U256, stored_epoch: u64) -> bool {
     const ETH_PATCH_SIZE: u64 = 30_000;
-    const REGENATION_THRESHOLD: u64 = ETH_PATCH_SIZE / 2;
+    const REGENERATION_THRESHOLD: u64 = ETH_PATCH_SIZE / 2;
 
     let current_block_number = block_number.as_u64();
     let last_block_number = (stored_epoch + 1) * ETH_PATCH_SIZE;
     let diff = last_block_number
         .checked_sub(current_block_number)
-        .unwrap_or(REGENATION_THRESHOLD);
-    diff <= REGENATION_THRESHOLD
+        .unwrap_or(REGENERATION_THRESHOLD);
+    diff <= REGENERATION_THRESHOLD
 }
 
 fn hex_to_bytes(v: &Vec<char>) -> Result<Vec<u8>, hex::FromHexError> {

@@ -1295,23 +1295,11 @@ dependencies = [
 [[package]]
 name = "ethash"
 version = "0.4.1"
-source = "git+https://github.com/edgeware-builders/ethash#dd10918f6dada75a6a5327b26db5d4fbf7643df0"
+source = "git+https://github.com/edgeware-builders/ethash?branch=rust-proof#b1d62d5ae364376ffeec19aa103c2a638b6b6bd2"
 dependencies = [
  "byteorder",
  "ethereum-types 0.8.0",
- "primitive-types 0.6.2",
- "rlp",
- "sha3 0.8.2",
-]
-
-[[package]]
-name = "ethash"
-version = "0.4.1"
-source = "git+https://github.com/edgeware-builders/ethash?branch=rust-proof#d5c5a8070ac6c19bcd5643d95dfe0063a0c83c50"
-dependencies = [
- "byteorder",
- "ethereum-types 0.8.0",
- "mrklt",
+ "lazy_static",
  "rlp",
  "rlp-derive",
  "sha2 0.8.2",
@@ -2844,6 +2832,9 @@ name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
+dependencies = [
+ "spin",
+]
 
 [[package]]
 name = "lazycell"
@@ -3671,12 +3662,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0debeb9fcf88823ea64d64e4a815ab1643f33127d995978e099942ce38f25238"
 
 [[package]]
-name = "mrklt"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3c8113da555aec03cdede06cdd4dca3f94853d0bb73107b4b489ae723f4341c"
-
-[[package]]
 name = "multihash"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3830,7 +3815,6 @@ dependencies = [
 name = "node-template-runtime"
 version = "2.0.0"
 dependencies = [
- "ethash 0.4.1 (git+https://github.com/edgeware-builders/ethash)",
  "frame-benchmarking",
  "frame-executive",
  "frame-support",
@@ -4238,7 +4222,7 @@ dependencies = [
 name = "pallet-worker"
 version = "2.0.0"
 dependencies = [
- "ethash 0.4.1 (git+https://github.com/edgeware-builders/ethash?branch=rust-proof)",
+ "ethash",
  "ethereum",
  "ethereum-types 0.9.2",
  "frame-support",
@@ -8281,7 +8265,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04f8ab788026715fa63b31960869617cba39117e520eb415b0139543e325ab59"
 dependencies = [
  "cfg-if 0.1.10",
- "rand 0.7.3",
+ "rand 0.3.23",
  "static_assertions 1.1.0",
 ]
 
