@@ -1295,11 +1295,14 @@ dependencies = [
 [[package]]
 name = "ethash"
 version = "0.4.1"
-source = "git+https://github.com/edgeware-builders/ethash?branch=rust-proof#b1d62d5ae364376ffeec19aa103c2a638b6b6bd2"
+source = "git+https://github.com/edgeware-builders/ethash?branch=rust-proof#88b157770f5b9ac40328e5188f6b1ae3d085ad59"
 dependencies = [
  "byteorder",
  "ethereum-types 0.8.0",
  "lazy_static",
+ "num_cpus",
+ "parking_lot 0.11.1",
+ "rayon",
  "rlp",
  "rlp-derive",
  "sha2 0.8.2",

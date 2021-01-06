@@ -30,6 +30,8 @@ use lite_json::json::JsonValue;
 use rlp::RlpStream;
 use sp_io::hashing::{keccak_256, sha2_256};
 
+mod constants;
+
 mod types;
 use types::*;
 
@@ -373,13 +375,13 @@ decl_module! {
             let header: types::BlockHeader = Self::fetch_block_header().unwrap();
 
             let epoch = (header.number as usize / 30000) as u64;
-            let epoch_info = StorageValueRef::persistent(b"light-client-worker::ethash-epoch");
+            let epoch_info = StorageValueRef::persistent(constants::storage_keys::STORED_EPOCH);
             let stored_epoch = match epoch_info.get::<u64>() {
                 Some(e) => e.unwrap(),
                 None => epoch,
             };
 
-            let cache_info = StorageValueRef::persistent(b"light-client-worker::ethash-cache");
+            let cache_info = StorageValueRef::persistent(constants::storage_keys::DAG_CACHE);
             // fetch cache or generate if it doesn't exist
             // TODO: Add storage lock here
             let mut cache = match cache_info.get::<Vec<u8>>() {
@@ -408,7 +410,16 @@ decl_module! {
             let rlp_header: Vec<u8> = stream.out();
 
             let signer = Signer::<T, T::AuthorityId>::any_account();
-            let dataset_info = StorageValueRef::persistent(b"light-client-worker::ethash-dataset");
+            let use_left_info = StorageValueRef::persistent(constants::storage_keys::USE_LEFT_DAG_DATASET);
+            // TODO(shekohex): determine when we need to swap and set this to false.
+            let use_left = match use_left_info.get::<bool>() {
+                Some(value) => value.unwrap(),
+                None => {
+                    // just return false to
+                    false
+                }
+            };
+            let dataset_info = StorageValueRef::persistent(b"");
             let dataset = match dataset_info.get::<Vec<u8>>() {
                 Some(dataset) => Some(dataset.unwrap()),
                 None => {
