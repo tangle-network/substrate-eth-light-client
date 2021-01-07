@@ -31,6 +31,7 @@ ethereum = { version = "0.4", default-features = false, features = ["with-codec"
 ethereum-types = { version = "0.9", default-features = false }
 rlp = { version = "0.4", default-features = false }
 rlp-derive = { version = "0.1.0", default-features = false }
+byteorder = { version = "1", default-features = false }
 sha3 = { version = "0.8", default-features = false }
 hex = { version = "0.4", default-features = false }
 tiny-keccak = { version = "2.0.1", features = ["keccak"] }

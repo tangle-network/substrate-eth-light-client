@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::too_many_arguments)]
 
+use byteorder::ByteOrder;
 use codec::{Decode, Encode};
 use frame_support::{
     debug, decl_error, decl_event, decl_module, decl_storage, ensure,
@@ -374,7 +375,7 @@ decl_module! {
 
             let header: types::BlockHeader = Self::fetch_block_header().unwrap();
 
-            let epoch = (header.number as usize / 30000) as u64;
+            let epoch = header.number.as_u64() / 30_000;
             let epoch_info = StorageValueRef::persistent(constants::storage_keys::STORED_EPOCH);
             let stored_epoch = match epoch_info.get::<u64>() {
                 Some(e) => e.unwrap(),
@@ -395,7 +396,7 @@ decl_module! {
             };
 
             let use_left_info = StorageValueRef::persistent(constants::storage_keys::USE_LEFT_DAG_DATASET);
-            let use_left = match use_left_info.get::<bool>() {
+            let mut use_left = match use_left_info.get::<bool>() {
                 Some(value) => value.unwrap(),
                 None => {
                     // okay, here we need to be a bit cliver, if this value is not exist yet, we will
@@ -417,6 +418,7 @@ decl_module! {
                 cache = l_dag.cache;
                 // switch the datasets.
                 use_left_info.set(&!use_left);
+                use_left = !use_left;
             }
 
             let mut stream = RlpStream::new();
@@ -482,18 +484,12 @@ decl_module! {
             let latest_block_number = Self::last_block_number();
             let call = if U256::from(header.number) > latest_block_number {
                 if Self::initialized() {
-                    // TODO(drewstone): we should convert this proofs to DoubleNodeWithMerkleProof
-                    // but how?
-                    let _tree = ethash::calc_dataset_merkle_proofs(
-                        stored_epoch as usize,
-                        dataset.as_slice(),
-                    );
-                    let proof = [DoubleNodeWithMerkleProof::new()].to_vec();
+                    let proofs = generate_proofs(&header, &dataset, &cache);
                     debug::native::info!("Adding header #: {:?}!", header.number);
-                    Some(Call::add_block_header(rlp_header, proof))
+                    Some(Call::add_block_header(rlp_header, proofs))
                 } else {
                     debug::native::info!("Initializing with header #: {:?}!", header.number);
-                    let dags_start_epoch: u64 = header.number / 30000;
+                    let dags_start_epoch: u64 = header.number.as_u64() / 30000;
                     Some(Call::init(
                         dags_start_epoch,
                         vec![],
@@ -545,6 +541,46 @@ fn should_generate_dataset(block_number: U256, stored_epoch: u64) -> bool {
         .checked_sub(current_block_number)
         .unwrap_or(REGENERATION_THRESHOLD);
     diff <= REGENERATION_THRESHOLD
+}
+
+fn generate_proofs(
+    header: &types::BlockHeader,
+    dataset: &[u8],
+    cache: &[u8],
+) -> Vec<DoubleNodeWithMerkleProof> {
+    let header_hash =
+        ethash::seal_header(&types::BlockHeaderSeal::from(header.clone()));
+    let epoch = header.number.as_usize() / 30_000;
+    let full_size = ethash::get_full_size(epoch);
+    let indices =
+        ethash::get_indices(header_hash, header.nonce, full_size, |i| {
+            let raw_data = ethash::calc_dataset_item(&cache, i);
+            let mut data = [0u32; 16];
+            for (i, b) in data.iter_mut().enumerate() {
+                *b = byteorder::LE::read_u32(&raw_data[(i * 4)..]);
+            }
+            data
+        });
+    let depth = ethash::calc_dataset_depth(epoch);
+    let tree = ethash::calc_dataset_merkle_proofs(epoch, &dataset);
+    let mut output = BlockWithProofs {
+        proof_length: depth as _,
+        merkle_root: H128(tree.hash().0),
+        elements: Vec::with_capacity(depth * 4),
+        merkle_proofs: Vec::with_capacity(depth * 2),
+    };
+    for index in &indices {
+        // these proofs could be serde to json files.
+        let (element, _, proofs) = tree.generate_proof(*index as _, depth);
+        let els = element.into_h256_array();
+        output
+            .elements
+            .extend(els.iter().map(|v| H256::from_slice(&v.0)));
+        output
+            .merkle_proofs
+            .extend(proofs.iter().map(|v| H128::from_slice(&v.0)));
+    }
+    output.to_double_node_with_merkle_proof_vec()
 }
 
 fn hex_to_bytes(v: &Vec<char>) -> Result<Vec<u8>, hex::FromHexError> {
@@ -693,7 +729,7 @@ impl<T: Config> Module<T> {
         let (_mix_hash, result) = Self::hashimoto_merkle(
             header.partial_hash.unwrap(),
             header.nonce,
-            U256::from(header.number),
+            header.number,
             &dag_nodes,
         );
 
@@ -712,7 +748,7 @@ impl<T: Config> Module<T> {
             && header.gas_used <= header.gas_limit
             && header.gas_limit < prev.gas_limit * 1025 / 1024
             && header.gas_limit > prev.gas_limit * 1023 / 1024
-            && header.gas_limit >= five_thousand
+            && header.gas_limit >= five_thousand.as_u64()
             && header.timestamp > prev.timestamp
             && header.number == prev.number + 1
             && header.parent_hash == prev.hash.unwrap()
@@ -1005,7 +1041,7 @@ impl<T: Config> Module<T> {
         let timestamp =
             U256::from_big_endian(&decoded_timestamp_hex[..]).as_u64();
 
-        let block = types::BlockHeader {
+        types::BlockHeader {
             parent_hash,
             uncles_hash,
             author: miner,
@@ -1014,18 +1050,16 @@ impl<T: Config> Module<T> {
             receipts_root,
             log_bloom: logs_bloom,
             difficulty,
-            number,
-            gas_limit,
-            gas_used,
+            number: number.into(),
+            gas_limit: gas_limit.as_u64(),
+            gas_used: gas_used.as_u64(),
             timestamp,
             extra_data: decoded_extra_data_hex,
             mix_hash,
             nonce,
             hash: Some(hash),
             partial_hash: None,
-        };
-
-        block
+        }
     }
 
     pub fn extract_property_from_block(

@@ -179,15 +179,6 @@ struct BlockWithProofsRaw {
     pub merkle_proofs: Vec<Hex>, // H128
 }
 
-#[derive(Debug)]
-struct BlockWithProofs {
-    pub proof_length: u64,
-    pub header_rlp: Hex,
-    pub merkle_root: H128,
-    pub elements: Vec<H256>,
-    pub merkle_proofs: Vec<H128>,
-}
-
 impl From<BlockWithProofsRaw> for BlockWithProofs {
     fn from(item: BlockWithProofsRaw) -> Self {
         let mut temp_merkle_root: [u8; 16] = [0; 16];
@@ -196,7 +187,6 @@ impl From<BlockWithProofsRaw> for BlockWithProofs {
         }
         Self {
             proof_length: item.proof_length,
-            header_rlp: item.header_rlp,
             merkle_root: H128::from(temp_merkle_root),
             elements: item
                 .elements
@@ -224,41 +214,6 @@ impl From<BlockWithProofsRaw> for BlockWithProofs {
                 })
                 .collect(),
         }
-    }
-}
-
-impl BlockWithProofs {
-    fn combine_dag_h256_to_h512(elements: Vec<H256>) -> Vec<H512> {
-        elements
-            .iter()
-            .zip(elements.iter().skip(1))
-            .enumerate()
-            .filter(|(i, _)| i % 2 == 0)
-            .map(|(_, (a, b))| {
-                let mut buffer = [0u8; 64];
-                buffer[..32].copy_from_slice(&(a.0));
-                buffer[32..].copy_from_slice(&(b.0));
-                H512(buffer.into())
-            })
-            .collect()
-    }
-
-    pub fn to_double_node_with_merkle_proof_vec(
-        &self,
-    ) -> Vec<types::DoubleNodeWithMerkleProof> {
-        let h512s = Self::combine_dag_h256_to_h512(self.elements.clone());
-        h512s
-            .iter()
-            .zip(h512s.iter().skip(1))
-            .enumerate()
-            .filter(|(i, _)| i % 2 == 0)
-            .map(|(i, (a, b))| DoubleNodeWithMerkleProof {
-                dag_nodes: [*a, *b],
-                proof: self.merkle_proofs[i / 2 * self.proof_length as usize
-                    ..(i / 2 + 1) * self.proof_length as usize]
-                    .to_vec(),
-            })
-            .collect()
     }
 }
 
@@ -373,7 +328,7 @@ fn should_make_infura_call_and_parse_result() {
         // when
         let number = Example::fetch_block_header().unwrap().number;
         // then
-        assert_eq!(number, 11193406);
+        assert_eq!(number.as_u64(), 11193406);
     });
 }
 

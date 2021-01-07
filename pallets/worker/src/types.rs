@@ -1,6 +1,5 @@
 use crate::*;
-use ethereum_types;
-use ethereum_types::{Bloom, H160, H256, H64, U256};
+use ethereum_types::{Address, Bloom, H160, H256, H64, U256};
 use rlp::{
     Decodable as RlpDecodable, DecoderError as RlpDecoderError,
     Encodable as RlpEncodable, Rlp, RlpStream,
@@ -15,15 +14,15 @@ use tiny_keccak::{Hasher, Keccak};
 pub struct BlockHeader {
     pub parent_hash: H256,
     pub uncles_hash: H256,
-    pub author: H160,
+    pub author: Address,
     pub state_root: H256,
     pub transactions_root: H256,
     pub receipts_root: H256,
     pub log_bloom: Bloom,
     pub difficulty: U256,
-    pub number: u64,
-    pub gas_limit: U256,
-    pub gas_used: U256,
+    pub number: U256,
+    pub gas_limit: u64,
+    pub gas_used: u64,
     pub timestamp: u64,
     pub extra_data: Vec<u8>,
     pub mix_hash: H256,
@@ -33,10 +32,47 @@ pub struct BlockHeader {
     pub partial_hash: Option<H256>,
 }
 
+#[derive(Debug, Clone)]
+pub struct BlockHeaderSeal {
+    pub parent_hash: H256,
+    pub uncles_hash: H256,
+    pub author: Address,
+    pub state_root: H256,
+    pub transactions_root: H256,
+    pub receipts_root: H256,
+    pub log_bloom: Bloom,
+    pub difficulty: U256,
+    pub number: U256,
+    pub gas_limit: u64,
+    pub gas_used: u64,
+    pub timestamp: u64,
+    pub extra_data: Vec<u8>,
+}
+
+impl From<BlockHeader> for BlockHeaderSeal {
+    fn from(b: BlockHeader) -> Self {
+        Self {
+            parent_hash: b.parent_hash,
+            uncles_hash: b.uncles_hash,
+            author: b.author,
+            state_root: b.state_root,
+            transactions_root: b.transactions_root,
+            receipts_root: b.receipts_root,
+            log_bloom: b.log_bloom,
+            difficulty: b.difficulty,
+            number: b.number,
+            gas_limit: b.gas_limit,
+            gas_used: b.gas_used,
+            timestamp: b.timestamp,
+            extra_data: b.extra_data,
+        }
+    }
+}
+
 impl BlockHeader {
     pub fn extra_data(&self) -> H256 {
         let mut data = [0u8; 32];
-        data.copy_from_slice(self.extra_data.as_slice());
+        data.copy_from_slice(&self.extra_data);
         H256(data.into())
     }
 
@@ -67,6 +103,26 @@ impl BlockHeader {
 impl RlpEncodable for BlockHeader {
     fn rlp_append(&self, stream: &mut RlpStream) {
         self.stream_rlp(stream, false);
+    }
+}
+
+impl RlpEncodable for BlockHeaderSeal {
+    fn rlp_append(&self, stream: &mut RlpStream) {
+        stream.begin_list(13);
+
+        stream.append(&self.parent_hash);
+        stream.append(&self.uncles_hash);
+        stream.append(&self.author);
+        stream.append(&self.state_root);
+        stream.append(&self.transactions_root);
+        stream.append(&self.receipts_root);
+        stream.append(&self.log_bloom);
+        stream.append(&self.difficulty);
+        stream.append(&self.number);
+        stream.append(&self.gas_limit);
+        stream.append(&self.gas_used);
+        stream.append(&self.timestamp);
+        stream.append(&self.extra_data);
     }
 }
 
@@ -220,5 +276,48 @@ impl DoubleNodeWithMerkleProof {
             }
         }
         Ok(leaf)
+    }
+}
+
+#[derive(Debug)]
+pub struct BlockWithProofs {
+    pub proof_length: u64,
+    pub merkle_root: H128,
+    pub elements: Vec<H256>,
+    pub merkle_proofs: Vec<H128>,
+}
+
+impl BlockWithProofs {
+    fn combine_dag_h256_to_h512(elements: Vec<H256>) -> Vec<H512> {
+        elements
+            .iter()
+            .zip(elements.iter().skip(1))
+            .enumerate()
+            .filter(|(i, _)| i % 2 == 0)
+            .map(|(_, (a, b))| {
+                let mut buffer = [0u8; 64];
+                buffer[..32].copy_from_slice(&(a.0));
+                buffer[32..].copy_from_slice(&(b.0));
+                H512(buffer.into())
+            })
+            .collect()
+    }
+
+    pub fn to_double_node_with_merkle_proof_vec(
+        &self,
+    ) -> Vec<types::DoubleNodeWithMerkleProof> {
+        let h512s = Self::combine_dag_h256_to_h512(self.elements.clone());
+        h512s
+            .iter()
+            .zip(h512s.iter().skip(1))
+            .enumerate()
+            .filter(|(i, _)| i % 2 == 0)
+            .map(|(i, (a, b))| DoubleNodeWithMerkleProof {
+                dag_nodes: [*a, *b],
+                proof: self.merkle_proofs[i / 2 * self.proof_length as usize
+                    ..(i / 2 + 1) * self.proof_length as usize]
+                    .to_vec(),
+            })
+            .collect()
     }
 }
