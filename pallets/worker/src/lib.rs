@@ -548,19 +548,18 @@ fn generate_proofs(
     dataset: &[u8],
     cache: &[u8],
 ) -> Vec<DoubleNodeWithMerkleProof> {
-    let header_hash =
-        ethash::seal_header(&types::BlockHeaderSeal::from(header.clone()));
+    let hash = ethash::seal_header(&BlockHeaderSeal::from(header.clone()));
     let epoch = header.number.as_usize() / 30_000;
     let full_size = ethash::get_full_size(epoch);
-    let indices =
-        ethash::get_indices(header_hash, header.nonce, full_size, |i| {
-            let raw_data = ethash::calc_dataset_item(&cache, i);
-            let mut data = [0u32; 16];
-            for (i, b) in data.iter_mut().enumerate() {
-                *b = byteorder::LE::read_u32(&raw_data[(i * 4)..]);
-            }
-            data
-        });
+    let indices = ethash::get_indices(hash, header.nonce, full_size, |i| {
+        let raw_data = ethash::calc_dataset_item(&cache, i);
+        let mut data = [0u32; 16];
+        for (i, b) in data.iter_mut().enumerate() {
+            *b = byteorder::LE::read_u32(&raw_data[(i * 4)..]);
+        }
+        data
+    });
+
     let depth = ethash::calc_dataset_depth(epoch);
     let tree = ethash::calc_dataset_merkle_proofs(epoch, &dataset);
     let mut output = BlockWithProofs {
@@ -569,16 +568,13 @@ fn generate_proofs(
         elements: Vec::with_capacity(depth * 4),
         merkle_proofs: Vec::with_capacity(depth * 2),
     };
+
     for index in &indices {
-        // these proofs could be serde to json files.
         let (element, _, proofs) = tree.generate_proof(*index as _, depth);
         let els = element.into_h256_array();
-        output
-            .elements
-            .extend(els.iter().map(|v| H256::from_slice(&v.0)));
-        output
-            .merkle_proofs
-            .extend(proofs.iter().map(|v| H128::from_slice(&v.0)));
+        output.elements.extend(&els);
+        let proofs = proofs.iter().map(|v| H128::from_slice(&v.0));
+        output.merkle_proofs.extend(proofs);
     }
     output.to_double_node_with_merkle_proof_vec()
 }
