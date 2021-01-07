@@ -20,4 +20,5 @@ pub mod storage_keys {
 
     /// To Lock the DAG Dataset Generation process.
     pub const DAG_DATASET_LOCK: &[u8] = b"light-client-worker::dataset-lock";
+    pub const DAG_CACHE_LOCK: &[u8] = b"light-client-worker::cache-lock";
 }

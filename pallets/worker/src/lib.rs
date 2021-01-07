@@ -14,6 +14,7 @@ use frame_system::{
     },
 };
 use sp_core::crypto::KeyTypeId;
+use sp_core::offchain::Duration;
 use sp_runtime::offchain::storage::StorageValueRef;
 use sp_runtime::offchain::storage_lock::{StorageLock, Time};
 use sp_runtime::{
@@ -282,7 +283,7 @@ decl_module! {
 
             if let Some(best_info) = Self::infos(Self::best_header_hash()) {
                 let header_hash = header.hash.unwrap();
-                let header_number = U256::from(header.number);
+                let header_number = header.number;
                 if header_number + finalized_gc_threshold < best_info.number {
                     panic!("Header is too old to have a chance to appear on the canonical chain.");
                 }
@@ -329,7 +330,7 @@ decl_module! {
 
                         // Replacing past hashes until we converge into the same parent.
                         // Starting from the parent hash.
-                        let mut number = U256::from(header.number) - 1;
+                        let mut number = header.number - 1;
                         let mut current_hash = info.parent_hash;
                         loop {
                             if let Some(prev_value) = Self::canonical_header_hashes(number) {
@@ -382,16 +383,36 @@ decl_module! {
                 None => epoch,
             };
 
+            let cache_lock_time = Duration::from_millis(5 * 60_000); // 5 minutes
+            let dag_lock_time = Duration::from_millis(15 * 60_000); // 15 minutes
+
             let cache_info = StorageValueRef::persistent(constants::storage_keys::DAG_CACHE);
             // fetch cache or generate if it doesn't exist
-            let mut cache = match cache_info.get::<Vec<u8>>() {
-                Some(c) => c.unwrap(),
+            let cache = match cache_info.get::<Vec<u8>>() {
+                Some(c) => Some(c.unwrap()),
                 None => {
-                    debug::native::info!("Starting cache generation!");
-                    let l_dag = DAG::new(header.number.into());
-                    debug::native::info!("Finished cache generation!");
-                    cache_info.set(&l_dag.cache);
-                    l_dag.cache
+                    let mut lock = StorageLock::<Time>::with_deadline(
+                        constants::storage_keys::DAG_CACHE_LOCK,
+                        cache_lock_time,
+                    );
+                    let maybe_cache = if let Ok(_guard) = lock.try_lock() {
+                        debug::native::info!("Starting cache generation!");
+                        let l_dag = DAG::new(header.number);
+                        debug::native::info!("Finished cache generation!");
+                        cache_info.set(&l_dag.cache);
+                        Some(l_dag.cache)
+                    } else {
+                        None
+                    };
+                    maybe_cache
+                },
+            };
+
+            let mut cache = match cache {
+                Some(v) => v,
+                None => {
+                    debug::native::info!("Cache generation already running ...");
+                    return;
                 }
             };
 
@@ -413,12 +434,22 @@ decl_module! {
             if epoch > stored_epoch {
                 debug::native::info!("Restarting cache generation due to epoch change!");
                 epoch_info.set(&epoch);
-                // regeneate cache and store the dag
-                let l_dag = DAG::new(header.number.into());
-                cache = l_dag.cache;
-                // switch the datasets.
-                use_left_info.set(&!use_left);
-                use_left = !use_left;
+                let mut lock = StorageLock::<Time>::with_deadline(
+                    constants::storage_keys::DAG_CACHE_LOCK,
+                    cache_lock_time,
+                );
+                if let Ok(_guard) = lock.try_lock() {
+                    debug::native::info!("Starting cache generation!");
+                    let l_dag = DAG::new(header.number);
+                    debug::native::info!("Finished cache generation!");
+                    cache_info.set(&l_dag.cache);
+                    cache = l_dag.cache;
+                    // switch the datasets.
+                    use_left_info.set(&!use_left);
+                    use_left = !use_left;
+                } else {
+                    return;
+                };
             }
 
             let mut stream = RlpStream::new();
@@ -436,13 +467,18 @@ decl_module! {
             let dataset = match dataset_info.get::<Vec<u8>>() {
                 Some(dataset) => Some(dataset.unwrap()),
                 None => {
-                    debug::native::info!("Generate dataset for stored epoch: {}", stored_epoch);
                     // lock the storage.
-                    let mut lock = StorageLock::<Time>::new(constants::storage_keys::DAG_DATASET_LOCK);
+                    let mut lock = StorageLock::<Time>::with_deadline(
+                        constants::storage_keys::DAG_DATASET_LOCK,
+                        dag_lock_time,
+                    );
                     let maybe_dataset = if let Ok(_guard) = lock.try_lock() {
+                        debug::native::info!("Generate dataset for stored epoch: {}", stored_epoch);
                         let dataset = generate_dataset(stored_epoch, cache.as_slice(), &dataset_info);
+            debug::native::info!("Dataset Generation finished");
                         Some(dataset)
                     } else {
+            debug::native::info!("Generation still Locked..");
                         // no work to be done here, until the dataset generation is complete.
                         None
                     };
@@ -454,10 +490,13 @@ decl_module! {
                 Some(dataset) => dataset,
                 // this skips the current invocation, as there is another worker is generating the
                 // dataset.
-                None => return
+                None => {
+                    debug::native::info!("DAG Dataset generation already started..");
+                    return;
+                }
             };
 
-            let should_generate_dataset = should_generate_dataset(U256::from(header.number), stored_epoch);
+            let should_generate_dataset = should_generate_dataset(header.number, stored_epoch);
             debug::native::info!("Should we generate the dataset? {}", should_generate_dataset);
             if should_generate_dataset {
                 // at this point we are sure that we have some dataset stored in either left or
@@ -467,7 +506,10 @@ decl_module! {
 
                 // this the same lock used before to generate the first dataset, but we are 100%
                 // sure that the we have a dataset, so there will be no locking there.
-                let mut lock = StorageLock::<Time>::new(constants::storage_keys::DAG_DATASET_LOCK);
+                let mut lock = StorageLock::<Time>::with_deadline(
+                    constants::storage_keys::DAG_DATASET_LOCK,
+                    dag_lock_time,
+                );
                 if let Ok(_guard) = lock.try_lock() {
                     // if we are using the left side, we should store the next DAG Dataset in the
                     // right, and the other way around.
@@ -481,9 +523,11 @@ decl_module! {
                     generate_dataset(next_epoch, cache.as_slice(), &key);
                 };
             }
+
             let latest_block_number = Self::last_block_number();
-            let call = if U256::from(header.number) > latest_block_number {
+            let call = if header.number > latest_block_number {
                 if Self::initialized() {
+                    // FIXME(shekohex): we should also lock while generating the proofs.
                     let proofs = generate_proofs(&header, &dataset, &cache);
                     debug::native::info!("Adding header #: {:?}!", header.number);
                     Some(Call::add_block_header(rlp_header, proofs))
