@@ -383,7 +383,6 @@ decl_module! {
 
             let cache_info = StorageValueRef::persistent(constants::storage_keys::DAG_CACHE);
             // fetch cache or generate if it doesn't exist
-            // TODO: Add storage lock here
             let mut cache = match cache_info.get::<Vec<u8>>() {
                 Some(c) => c.unwrap(),
                 None => {
@@ -395,7 +394,20 @@ decl_module! {
                 }
             };
 
-            // when the epoch changes, we need to regenerate the cache
+            let use_left_info = StorageValueRef::persistent(constants::storage_keys::USE_LEFT_DAG_DATASET);
+            let use_left = match use_left_info.get::<bool>() {
+                Some(value) => value.unwrap(),
+                None => {
+                    // okay, here we need to be a bit cliver, if this value is not exist yet, we will
+                    // assume that we are a clean state, which means that there is no dataset too.
+                    // so we will set this to `true` and return, next we will try to load the
+                    // dataset and it will not be exist yet, so we will generate it.
+                    use_left_info.set(&true);
+                    true
+                }
+            };
+
+            // when the epoch changes, we need to regenerate the cache and swap the dataset.
             // otherwise we repopulate the light DAG with existing cache.
             if epoch > stored_epoch {
                 debug::native::info!("Restarting cache generation due to epoch change!");
@@ -403,6 +415,8 @@ decl_module! {
                 // regeneate cache and store the dag
                 let l_dag = DAG::new(header.number.into());
                 cache = l_dag.cache;
+                // switch the datasets.
+                use_left_info.set(&!use_left);
             }
 
             let mut stream = RlpStream::new();
@@ -410,30 +424,21 @@ decl_module! {
             let rlp_header: Vec<u8> = stream.out();
 
             let signer = Signer::<T, T::AuthorityId>::any_account();
-            let use_left_info = StorageValueRef::persistent(constants::storage_keys::USE_LEFT_DAG_DATASET);
-            // TODO(shekohex): determine when we need to swap and set this to false.
-            let use_left = match use_left_info.get::<bool>() {
-                Some(value) => value.unwrap(),
-                None => {
-                    // just return false to
-                    false
-                }
+
+            let dataset_info = if use_left {
+                StorageValueRef::persistent(constants::storage_keys::LEFT_DAG_DATASET)
+            } else {
+                StorageValueRef::persistent(constants::storage_keys::RIGHT_DAG_DATASET)
             };
-            let dataset_info = StorageValueRef::persistent(b"");
+
             let dataset = match dataset_info.get::<Vec<u8>>() {
                 Some(dataset) => Some(dataset.unwrap()),
                 None => {
-                    // FIXME(shekohex): move this code to a function guarded by std feature.
-                    // so we can only generate the dataset on std supported targets.
                     debug::native::info!("Generate dataset for stored epoch: {}", stored_epoch);
                     // lock the storage.
-                    let mut lock = StorageLock::<Time>::new(b"light-client-worker::ethash-dataset");
+                    let mut lock = StorageLock::<Time>::new(constants::storage_keys::DAG_DATASET_LOCK);
                     let maybe_dataset = if let Ok(_guard) = lock.try_lock() {
-                        let dataset_size = ethash::get_full_size(stored_epoch as usize);
-                        let mut dataset = Vec::with_capacity(dataset_size);
-                        dataset.resize(dataset_size, 0u8);
-                        ethash::make_dataset(&mut dataset, &cache);
-                        dataset_info.set(&dataset);
+                        let dataset = generate_dataset(stored_epoch, cache.as_slice(), &dataset_info);
                         Some(dataset)
                     } else {
                         // no work to be done here, until the dataset generation is complete.
@@ -442,22 +447,37 @@ decl_module! {
                     maybe_dataset
                 },
             };
+
             let dataset = match dataset {
                 Some(dataset) => dataset,
                 // this skips the current invocation, as there is another worker is generating the
                 // dataset.
                 None => return
             };
+
             let should_generate_dataset = should_generate_dataset(U256::from(header.number), stored_epoch);
             debug::native::info!("Should we generate the dataset? {}", should_generate_dataset);
             if should_generate_dataset {
-                // FIXME(shekohex): lock the storage here to avoid regeneation.
-                // not yet sure how we will swap these and when.
-                let dataset_size = ethash::get_full_size(epoch as usize);
-                let mut dataset = Vec::with_capacity(dataset_size);
-                dataset.resize(dataset_size, 0u8);
-                ethash::make_dataset(&mut dataset, &cache);
-                // TODO(shekohex): save the dataset.
+                // at this point we are sure that we have some dataset stored in either left or
+                // right.
+                // we will will generate the next epoch dataset and store it in the other end of
+                // the dataset, also we will lock here to avoid double generation.
+
+                // this the same lock used before to generate the first dataset, but we are 100%
+                // sure that the we have a dataset, so there will be no locking there.
+                let mut lock = StorageLock::<Time>::new(constants::storage_keys::DAG_DATASET_LOCK);
+                if let Ok(_guard) = lock.try_lock() {
+                    // if we are using the left side, we should store the next DAG Dataset in the
+                    // right, and the other way around.
+                    let key = if use_left {
+                        StorageValueRef::persistent(constants::storage_keys::RIGHT_DAG_DATASET)
+                    } else {
+                        StorageValueRef::persistent(constants::storage_keys::LEFT_DAG_DATASET)
+                    };
+                    let next_epoch = stored_epoch + 1;
+                    // this will generate and store the dataset in the key.
+                    generate_dataset(next_epoch, cache.as_slice(), &key);
+                };
             }
             let latest_block_number = Self::last_block_number();
             let call = if U256::from(header.number) > latest_block_number {
@@ -501,6 +521,18 @@ decl_module! {
             }
         }
     }
+}
+
+fn generate_dataset(
+    epoch: u64,
+    cache: &[u8],
+    key: &StorageValueRef,
+) -> Vec<u8> {
+    let dataset_size = ethash::get_full_size(epoch as usize);
+    let mut dataset = vec![0u8; dataset_size];
+    ethash::make_dataset(&mut dataset, &cache);
+    key.set(&dataset);
+    dataset
 }
 
 fn should_generate_dataset(block_number: U256, stored_epoch: u64) -> bool {

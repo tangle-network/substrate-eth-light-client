@@ -17,4 +17,7 @@ pub mod storage_keys {
     /// A Toggle to switch between the diffrent datasets.
     pub const USE_LEFT_DAG_DATASET: &[u8] =
         b"light-client-worker::use-left-dataset";
+
+    /// To Lock the DAG Dataset Generation process.
+    pub const DAG_DATASET_LOCK: &[u8] = b"light-client-worker::dataset-lock";
 }
