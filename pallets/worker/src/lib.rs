@@ -1,4 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![allow(clippy::too_many_arguments)]
 
 use codec::{Decode, Encode};
 use frame_support::{
@@ -13,6 +14,7 @@ use frame_system::{
 };
 use sp_core::crypto::KeyTypeId;
 use sp_runtime::offchain::storage::StorageValueRef;
+use sp_runtime::offchain::storage_lock::{StorageLock, Time};
 use sp_runtime::{
     offchain::http,
     transaction_validity::{
@@ -27,6 +29,8 @@ use ethereum_types::{Bloom, H128, H160, H256, H512, H64, U256};
 use lite_json::json::JsonValue;
 use rlp::RlpStream;
 use sp_io::hashing::{keccak_256, sha2_256};
+
+mod constants;
 
 mod types;
 use types::*;
@@ -229,7 +233,7 @@ decl_module! {
             let header_hash = header.hash.unwrap();
             let header_number = U256::from(header.number);
 
-            <BestHeaderHash>::set(header_hash.clone());
+            <BestHeaderHash>::set(header_hash);
             <AllHeaderHashes>::insert(header_number, vec![header_hash]);
             <CanonicalHeaderHashes>::insert(header_number, header_hash);
             <Headers>::insert(header_hash, header.clone());
@@ -260,7 +264,7 @@ decl_module! {
                 let prev = Self::headers(header.parent_hash)
                     .expect("Parent header should be present to add a new header");
                 ensure!(
-                    Self::verify_header(header.clone(), prev.clone(), dag_nodes),
+                    Self::verify_header(header.clone(), prev, dag_nodes),
                     "The header is not valid"
                 );
             }
@@ -285,7 +289,7 @@ decl_module! {
                 if let Some(parent_info) = Self::infos(header.parent_hash) {
                     // Record this header in `all_hashes`.
                     let mut all_hashes = Self::all_header_hashes(header_number);
-                    if all_hashes.len() > 0 {
+                    if !all_hashes.is_empty() {
                         ensure!(all_hashes.iter().any(|x| x == &header_hash), "Header is already known.");
                     }
                     all_hashes.push(header_hash);
@@ -295,7 +299,7 @@ decl_module! {
                     <Headers>::insert(header_hash, header.clone());
                     let info = HeaderInfo {
                         total_difficulty: parent_info.total_difficulty + header.difficulty,
-                        parent_hash: header.parent_hash.clone(),
+                        parent_hash: header.parent_hash,
                         number: header_number,
                     };
                     <Infos>::insert(header_hash, info.clone());
@@ -325,7 +329,7 @@ decl_module! {
                         // Replacing past hashes until we converge into the same parent.
                         // Starting from the parent hash.
                         let mut number = U256::from(header.number) - 1;
-                        let mut current_hash = info.clone().parent_hash;
+                        let mut current_hash = info.parent_hash;
                         loop {
                             if let Some(prev_value) = Self::canonical_header_hashes(number) {
                                 <CanonicalHeaderHashes>::insert(number, current_hash);
@@ -367,18 +371,18 @@ decl_module! {
         fn offchain_worker(block_number: T::BlockNumber) {
             let parent_hash = <system::Module<T>>::block_hash(block_number - 1u32.into());
             debug::native::info!("Current block: {:?} (parent hash: {:?})", block_number, parent_hash);
+
             let header: types::BlockHeader = Self::fetch_block_header().unwrap();
 
             let epoch = (header.number as usize / 30000) as u64;
-            let epoch_info = StorageValueRef::persistent(b"light-client-worker::ethash-epoch");
+            let epoch_info = StorageValueRef::persistent(constants::storage_keys::STORED_EPOCH);
             let stored_epoch = match epoch_info.get::<u64>() {
                 Some(e) => e.unwrap(),
                 None => epoch,
             };
 
-            let cache_info = StorageValueRef::persistent(b"light-client-worker::ethash-cache");
+            let cache_info = StorageValueRef::persistent(constants::storage_keys::DAG_CACHE);
             // fetch cache or generate if it doesn't exist
-            // TODO: Add storage lock here
             let mut cache = match cache_info.get::<Vec<u8>>() {
                 Some(c) => c.unwrap(),
                 None => {
@@ -386,18 +390,33 @@ decl_module! {
                     let l_dag = DAG::new(header.number.into());
                     debug::native::info!("Finished cache generation!");
                     cache_info.set(&l_dag.cache);
-                    l_dag.cache.clone()
+                    l_dag.cache
                 }
             };
 
-            // when the epoch changes, we need to regenerate the cache
+            let use_left_info = StorageValueRef::persistent(constants::storage_keys::USE_LEFT_DAG_DATASET);
+            let use_left = match use_left_info.get::<bool>() {
+                Some(value) => value.unwrap(),
+                None => {
+                    // okay, here we need to be a bit cliver, if this value is not exist yet, we will
+                    // assume that we are a clean state, which means that there is no dataset too.
+                    // so we will set this to `true` and return, next we will try to load the
+                    // dataset and it will not be exist yet, so we will generate it.
+                    use_left_info.set(&true);
+                    true
+                }
+            };
+
+            // when the epoch changes, we need to regenerate the cache and swap the dataset.
             // otherwise we repopulate the light DAG with existing cache.
             if epoch > stored_epoch {
                 debug::native::info!("Restarting cache generation due to epoch change!");
                 epoch_info.set(&epoch);
                 // regeneate cache and store the dag
                 let l_dag = DAG::new(header.number.into());
-                cache = l_dag.cache.clone();
+                cache = l_dag.cache;
+                // switch the datasets.
+                use_left_info.set(&!use_left);
             }
 
             let mut stream = RlpStream::new();
@@ -406,20 +425,79 @@ decl_module! {
 
             let signer = Signer::<T, T::AuthorityId>::any_account();
 
+            let dataset_info = if use_left {
+                StorageValueRef::persistent(constants::storage_keys::LEFT_DAG_DATASET)
+            } else {
+                StorageValueRef::persistent(constants::storage_keys::RIGHT_DAG_DATASET)
+            };
+
+            let dataset = match dataset_info.get::<Vec<u8>>() {
+                Some(dataset) => Some(dataset.unwrap()),
+                None => {
+                    debug::native::info!("Generate dataset for stored epoch: {}", stored_epoch);
+                    // lock the storage.
+                    let mut lock = StorageLock::<Time>::new(constants::storage_keys::DAG_DATASET_LOCK);
+                    let maybe_dataset = if let Ok(_guard) = lock.try_lock() {
+                        let dataset = generate_dataset(stored_epoch, cache.as_slice(), &dataset_info);
+                        Some(dataset)
+                    } else {
+                        // no work to be done here, until the dataset generation is complete.
+                        None
+                    };
+                    maybe_dataset
+                },
+            };
+
+            let dataset = match dataset {
+                Some(dataset) => dataset,
+                // this skips the current invocation, as there is another worker is generating the
+                // dataset.
+                None => return
+            };
+
+            let should_generate_dataset = should_generate_dataset(U256::from(header.number), stored_epoch);
+            debug::native::info!("Should we generate the dataset? {}", should_generate_dataset);
+            if should_generate_dataset {
+                // at this point we are sure that we have some dataset stored in either left or
+                // right.
+                // we will will generate the next epoch dataset and store it in the other end of
+                // the dataset, also we will lock here to avoid double generation.
+
+                // this the same lock used before to generate the first dataset, but we are 100%
+                // sure that the we have a dataset, so there will be no locking there.
+                let mut lock = StorageLock::<Time>::new(constants::storage_keys::DAG_DATASET_LOCK);
+                if let Ok(_guard) = lock.try_lock() {
+                    // if we are using the left side, we should store the next DAG Dataset in the
+                    // right, and the other way around.
+                    let key = if use_left {
+                        StorageValueRef::persistent(constants::storage_keys::RIGHT_DAG_DATASET)
+                    } else {
+                        StorageValueRef::persistent(constants::storage_keys::LEFT_DAG_DATASET)
+                    };
+                    let next_epoch = stored_epoch + 1;
+                    // this will generate and store the dataset in the key.
+                    generate_dataset(next_epoch, cache.as_slice(), &key);
+                };
+            }
             let latest_block_number = Self::last_block_number();
             let call = if U256::from(header.number) > latest_block_number {
                 if Self::initialized() {
-                    // TODO: Add proof generation/fetching
+                    // TODO(drewstone): we should convert this proofs to DoubleNodeWithMerkleProof
+                    // but how?
+                    let _tree = ethash::calc_dataset_merkle_proofs(
+                        stored_epoch as usize,
+                        dataset.as_slice(),
+                    );
                     let proof = [DoubleNodeWithMerkleProof::new()].to_vec();
                     debug::native::info!("Adding header #: {:?}!", header.number);
-                    Some(Call::add_block_header(rlp_header.clone(), proof))
+                    Some(Call::add_block_header(rlp_header, proof))
                 } else {
                     debug::native::info!("Initializing with header #: {:?}!", header.number);
                     let dags_start_epoch: u64 = header.number / 30000;
                     Some(Call::init(
                         dags_start_epoch,
                         vec![],
-                        rlp_header.clone(),
+                        rlp_header,
                         U256::from(30),
                         U256::from(10),
                         U256::from(10),
@@ -443,6 +521,30 @@ decl_module! {
             }
         }
     }
+}
+
+fn generate_dataset(
+    epoch: u64,
+    cache: &[u8],
+    key: &StorageValueRef,
+) -> Vec<u8> {
+    let dataset_size = ethash::get_full_size(epoch as usize);
+    let mut dataset = vec![0u8; dataset_size];
+    ethash::make_dataset(&mut dataset, &cache);
+    key.set(&dataset);
+    dataset
+}
+
+fn should_generate_dataset(block_number: U256, stored_epoch: u64) -> bool {
+    const ETH_PATCH_SIZE: u64 = 30_000;
+    const REGENERATION_THRESHOLD: u64 = ETH_PATCH_SIZE / 2;
+
+    let current_block_number = block_number.as_u64();
+    let last_block_number = (stored_epoch + 1) * ETH_PATCH_SIZE;
+    let diff = last_block_number
+        .checked_sub(current_block_number)
+        .unwrap_or(REGENERATION_THRESHOLD);
+    diff <= REGENERATION_THRESHOLD
 }
 
 fn hex_to_bytes(v: &Vec<char>) -> Result<Vec<u8>, hex::FromHexError> {

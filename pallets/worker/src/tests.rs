@@ -361,22 +361,6 @@ fn read_block_raw(filename: String) -> BlockWithProofsRaw {
     .unwrap()
 }
 
-// #[test]
-// fn should_make_http_call_and_parse_result() {
-// 	let (offchain, state) = testing::TestOffchainExt::new();
-// 	let mut t = sp_io::TestExternalities::default();
-// 	t.register_extension(OffchainExt::new(offchain));
-
-// 	set_block_response(&mut state.write());
-
-// 	t.execute_with(|| {
-// 		// when
-// 		let number = Example::fetch_block_header().unwrap().number;
-// 		// then
-// 		assert_eq!(number, 8934751);
-// 	});
-// }
-
 #[test]
 fn should_make_infura_call_and_parse_result() {
     let (offchain, state) = testing::TestOffchainExt::new();
@@ -683,4 +667,64 @@ fn add_2_blocks_from_400000() {
         assert_eq!((hashes[0].0), Example::block_hash(400_000).unwrap().0);
         assert_eq!((hashes[1].0), Example::block_hash(400_001).unwrap().0);
     });
+}
+
+#[test]
+fn should_check_for_generate_dataset() {
+    let block_number = U256::from(2);
+    let stored_epoch = block_number.as_u64() / 30_000;
+    assert_eq!(should_generate_dataset(block_number, stored_epoch), false);
+
+    let block_number = U256::from(400_000);
+    let stored_epoch = 0; // last_block_number 30_000
+
+    assert_eq!(should_generate_dataset(block_number, stored_epoch), true);
+}
+
+#[test]
+fn add_block_2_rust_ethash() {
+    let (offchain, _state) = testing::TestOffchainExt::new();
+    let mut t = sp_io::TestExternalities::default();
+    t.register_extension(OffchainExt::new(offchain));
+    t.execute_with(|| {
+        let pair = sp_core::sr25519::Pair::from_seed(
+            b"12345678901234567890123456789012",
+        );
+        // Check on 3 block from here: https://github.com/KyberNetwork/bridge_eos_smart_contracts/blob/master/scripts/jungle/jungle_relay_3.js
+        let (blocks, hashes) = get_blocks(&WEB3RS, 2, 4);
+
+        // $ ../ethrelay/ethashproof/cmd/relayer/relayer 3
+        let blocks_with_proofs: Vec<BlockWithProofs> =
+            ["./data/2_rust_ethash.json", "./data/3.json"]
+                .iter()
+                .map(|filename| read_block((&filename).to_string()))
+                .collect();
+
+        assert_ok!(Example::init(
+            Origin::signed(pair.public()),
+            0,
+            read_roots_collection().dag_merkle_roots,
+            blocks[0].clone(),
+            U256::from(30),
+            U256::from(10),
+            U256::from(10),
+            None,
+        ));
+
+        let l_dag = DAG::new(2.into());
+
+        for (block, _proof) in blocks
+            .into_iter()
+            .zip(blocks_with_proofs.into_iter())
+            .skip(1)
+        {
+            assert_ok!(Example::add_block_header(
+                Origin::signed(pair.public()),
+                block,
+                _proof.to_double_node_with_merkle_proof_vec(),
+            ));
+        }
+
+        assert_eq!((hashes[1].0), (Example::block_hash(3).unwrap().0));
+    })
 }
