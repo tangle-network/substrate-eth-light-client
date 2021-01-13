@@ -383,8 +383,21 @@ decl_module! {
             };
 
             let header: types::BlockHeader = Self::fetch_block_header().unwrap();
-            // push the last header into the back of the queue.
-            header_queue.push_back(header);
+
+            // we check if we already pushed this header into the queue.
+            // so we avoid having double headers.
+            let should_add_header = if let Some(h) = header_queue.pop_back() {
+                let v = h.number != header.number;
+                header_queue.push_back(h);
+                v
+            } else {
+                true
+            };
+
+            if should_add_header {
+                // push the last header into the back of the queue.
+                header_queue.push_back(header);
+            }
             // now get the header in the front of the queue.
             let header = header_queue.pop_front().expect("queue must have at least one header");
 
@@ -425,7 +438,6 @@ decl_module! {
             };
             header_queue_info.set(&header_queue);
             if let Some(c) = call {
-                debug::native::info!("send signed transaction with c: {:?}", c);
                 let result = signer.send_signed_transaction(|_acct| c.clone());
                 // Display error if the signed tx fails.
                 if let Some((acc, res)) = result {
@@ -433,6 +445,8 @@ decl_module! {
                         debug::error!("failure: offchain_signed_tx: tx sent: {:?}", acc.id);
                     }
                     // Transaction is sent successfully
+                } else {
+                    debug::native::info!("transaction sent but no result");
                 }
             } else {
                 debug::native::info!("no calls to be sent ..");
