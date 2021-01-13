@@ -466,8 +466,6 @@ fn add_blocks_2_and_3() {
             None,
         ));
 
-        let l_dag = DAG::new(2.into());
-
         for (block, _proof) in blocks
             .into_iter()
             .zip(blocks_with_proofs.into_iter())
@@ -549,7 +547,6 @@ fn add_two_blocks_from_8996776() {
             None,
         ));
 
-        let l_dag = DAG::new(8_996_776.into());
 
         for (block, _proof) in blocks
             .into_iter()
@@ -605,7 +602,7 @@ fn add_2_blocks_from_400000() {
             None,
         ));
 
-        let l_dag = DAG::new(400_000.into());
+        assert_eq!(Example::initialized(), true);
 
         for (block, _proof) in blocks
             .into_iter()
@@ -624,17 +621,17 @@ fn add_2_blocks_from_400000() {
     });
 }
 
-#[test]
-fn should_check_for_generate_dataset() {
-    let block_number = U256::from(2);
-    let stored_epoch = block_number.as_u64() / 30_000;
-    assert_eq!(should_generate_dataset(block_number, stored_epoch), false);
+// #[test]
+// fn should_check_for_generate_dataset() {
+//     let block_number = U256::from(2);
+//     let stored_epoch = block_number.as_u64() / 30_000;
+//     assert_eq!(should_generate_dataset(block_number, stored_epoch), false);
 
-    let block_number = U256::from(400_000);
-    let stored_epoch = 0; // last_block_number 30_000
+//     let block_number = U256::from(400_000);
+//     let stored_epoch = 0; // last_block_number 30_000
 
-    assert_eq!(should_generate_dataset(block_number, stored_epoch), true);
-}
+//     assert_eq!(should_generate_dataset(block_number, stored_epoch), true);
+// }
 
 #[test]
 fn add_block_2_rust_ethash() {
@@ -666,7 +663,7 @@ fn add_block_2_rust_ethash() {
             None,
         ));
 
-        let l_dag = DAG::new(2.into());
+        assert_eq!(Example::initialized(), true);
 
         for (block, _proof) in blocks
             .into_iter()
