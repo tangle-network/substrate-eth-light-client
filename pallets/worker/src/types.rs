@@ -7,6 +7,12 @@ use rlp::{
 use rlp_derive::{
     RlpDecodable as RlpDecodableDerive, RlpEncodable as RlpEncodableDerive,
 };
+
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+#[cfg(not(feature = "std"))]
+use alloc::string::String;
+
 use sp_runtime::RuntimeDebug;
 use tiny_keccak::{Hasher, Keccak};
 
@@ -73,7 +79,7 @@ impl BlockHeader {
     pub fn extra_data(&self) -> H256 {
         let mut data = [0u8; 32];
         data.copy_from_slice(&self.extra_data);
-        H256(data.into())
+        H256(data)
     }
 
     fn stream_rlp(&self, stream: &mut RlpStream, partial: bool) {
@@ -249,7 +255,7 @@ impl DoubleNodeWithMerkleProof {
     fn truncate_to_h128(arr: H256) -> H128 {
         let mut data = [0u8; 16];
         data.copy_from_slice(&(arr.0)[16..]);
-        H128(data.into())
+        H128(data)
     }
 
     fn hash_h128(l: H128, r: H128) -> H128 {
@@ -279,12 +285,51 @@ impl DoubleNodeWithMerkleProof {
     }
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct ProofsPayload {
+    pub rlp: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct BlockWithProofsRaw {
+    pub number: u64,
+    pub proof_length: u64,
+    pub merkle_root: String,
+    pub elements: Vec<String>,
+    pub merkle_proofs: Vec<String>,
+}
+
 #[derive(Debug)]
 pub struct BlockWithProofs {
     pub proof_length: u64,
     pub merkle_root: H128,
     pub elements: Vec<H256>,
     pub merkle_proofs: Vec<H128>,
+}
+
+impl From<BlockWithProofsRaw> for BlockWithProofs {
+    fn from(raw: BlockWithProofsRaw) -> Self {
+        Self {
+            proof_length: raw.proof_length,
+            merkle_root: H128::from_slice(
+                &hex::decode(&raw.merkle_root).unwrap(),
+            ),
+            merkle_proofs: raw
+                .merkle_proofs
+                .into_iter()
+                .map(|v| hex::decode(&v))
+                .flatten()
+                .map(|v| H128::from_slice(&v))
+                .collect(),
+            elements: raw
+                .elements
+                .into_iter()
+                .map(|v| hex::decode(&v))
+                .flatten()
+                .map(|v| H256::from_slice(&v))
+                .collect(),
+        }
+    }
 }
 
 impl BlockWithProofs {

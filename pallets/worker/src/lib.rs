@@ -1,7 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::too_many_arguments)]
 
-use byteorder::ByteOrder;
 use codec::{Decode, Encode};
 use frame_support::{
     debug, decl_error, decl_event, decl_module, decl_storage, ensure,
@@ -14,9 +13,7 @@ use frame_system::{
     },
 };
 use sp_core::crypto::KeyTypeId;
-use sp_core::offchain::Duration;
 use sp_runtime::offchain::storage::StorageValueRef;
-use sp_runtime::offchain::storage_lock::{StorageLock, Time};
 use sp_runtime::{
     offchain::http,
     transaction_validity::{
@@ -24,6 +21,7 @@ use sp_runtime::{
         ValidTransaction,
     },
 };
+use sp_std::collections::vec_deque::VecDeque;
 use sp_std::prelude::*;
 
 use ethash::{EthereumPatch, LightDAG};
@@ -218,6 +216,7 @@ decl_module! {
             num_confirmations: U256,
             trusted_signer: Option<T::AccountId>,
         ) {
+            debug::native::info!("Initializing the module ..");
             let _signer = ensure_signed(origin)?;
             ensure!(Self::dags_start_epoch().is_none(), "Already initialized");
             ensure!(Self::hashes_gc_threshold().is_none(), "Already initialized");
@@ -233,7 +232,7 @@ decl_module! {
 
             let header: types::BlockHeader = rlp::decode(first_header.as_slice()).unwrap();
             let header_hash = header.hash.unwrap();
-            let header_number = U256::from(header.number);
+            let header_number = header.number;
 
             <BestHeaderHash>::set(header_hash);
             <AllHeaderHashes>::insert(header_number, vec![header_hash]);
@@ -242,8 +241,9 @@ decl_module! {
             <Infos>::insert(header_hash, HeaderInfo {
                 total_difficulty: header.difficulty,
                 parent_hash: header.parent_hash,
-                number: U256::from(header.number),
+                number: header.number,
             });
+            debug::native::info!("module is ready ..");
         }
 
         /// Add the block header to the client.
@@ -374,83 +374,19 @@ decl_module! {
             let parent_hash = <system::Module<T>>::block_hash(block_number - 1u32.into());
             debug::native::info!("Current block: {:?} (parent hash: {:?})", block_number, parent_hash);
 
+            let header_queue_info = StorageValueRef::persistent(
+                constants::storage_keys::BLOCKS_QUEUE,
+            );
+            let mut header_queue = match header_queue_info.get::<VecDeque<types::BlockHeader>>() {
+                Some(queue) => queue.unwrap(),
+                None => VecDeque::new(),
+            };
+
             let header: types::BlockHeader = Self::fetch_block_header().unwrap();
-
-            let epoch = header.number.as_u64() / 30_000;
-            let epoch_info = StorageValueRef::persistent(constants::storage_keys::STORED_EPOCH);
-            let stored_epoch = match epoch_info.get::<u64>() {
-                Some(e) => e.unwrap(),
-                None => epoch,
-            };
-
-            let cache_lock_time = Duration::from_millis(5 * 60_000); // 5 minutes
-            let dag_lock_time = Duration::from_millis(15 * 60_000); // 15 minutes
-
-            let cache_info = StorageValueRef::persistent(constants::storage_keys::DAG_CACHE);
-            // fetch cache or generate if it doesn't exist
-            let cache = match cache_info.get::<Vec<u8>>() {
-                Some(c) => Some(c.unwrap()),
-                None => {
-                    let mut lock = StorageLock::<Time>::with_deadline(
-                        constants::storage_keys::DAG_CACHE_LOCK,
-                        cache_lock_time,
-                    );
-                    let maybe_cache = if let Ok(_guard) = lock.try_lock() {
-                        debug::native::info!("Starting cache generation!");
-                        let l_dag = DAG::new(header.number);
-                        debug::native::info!("Finished cache generation!");
-                        cache_info.set(&l_dag.cache);
-                        Some(l_dag.cache)
-                    } else {
-                        None
-                    };
-                    maybe_cache
-                },
-            };
-
-            let mut cache = match cache {
-                Some(v) => v,
-                None => {
-                    debug::native::info!("Cache generation already running ...");
-                    return;
-                }
-            };
-
-            let use_left_info = StorageValueRef::persistent(constants::storage_keys::USE_LEFT_DAG_DATASET);
-            let mut use_left = match use_left_info.get::<bool>() {
-                Some(value) => value.unwrap(),
-                None => {
-                    // okay, here we need to be a bit cliver, if this value is not exist yet, we will
-                    // assume that we are a clean state, which means that there is no dataset too.
-                    // so we will set this to `true` and return, next we will try to load the
-                    // dataset and it will not be exist yet, so we will generate it.
-                    use_left_info.set(&true);
-                    true
-                }
-            };
-
-            // when the epoch changes, we need to regenerate the cache and swap the dataset.
-            // otherwise we repopulate the light DAG with existing cache.
-            if epoch > stored_epoch {
-                debug::native::info!("Restarting cache generation due to epoch change!");
-                epoch_info.set(&epoch);
-                let mut lock = StorageLock::<Time>::with_deadline(
-                    constants::storage_keys::DAG_CACHE_LOCK,
-                    cache_lock_time,
-                );
-                if let Ok(_guard) = lock.try_lock() {
-                    debug::native::info!("Starting cache generation!");
-                    let l_dag = DAG::new(header.number);
-                    debug::native::info!("Finished cache generation!");
-                    cache_info.set(&l_dag.cache);
-                    cache = l_dag.cache;
-                    // switch the datasets.
-                    use_left_info.set(&!use_left);
-                    use_left = !use_left;
-                } else {
-                    return;
-                };
-            }
+            // push the last header into the back of the queue.
+            header_queue.push_back(header);
+            // now get the header in the front of the queue.
+            let header = header_queue.pop_front().expect("queue must have at least one header");
 
             let mut stream = RlpStream::new();
             Self::rlp_append(header.clone(), &mut stream);
@@ -458,82 +394,21 @@ decl_module! {
 
             let signer = Signer::<T, T::AuthorityId>::any_account();
 
-            let dataset_info = if use_left {
-                StorageValueRef::persistent(constants::storage_keys::LEFT_DAG_DATASET)
-            } else {
-                StorageValueRef::persistent(constants::storage_keys::RIGHT_DAG_DATASET)
-            };
-
-            let dataset = match dataset_info.get::<Vec<u8>>() {
-                Some(dataset) => Some(dataset.unwrap()),
-                None => {
-                    // lock the storage.
-                    let mut lock = StorageLock::<Time>::with_deadline(
-                        constants::storage_keys::DAG_DATASET_LOCK,
-                        dag_lock_time,
-                    );
-                    let maybe_dataset = if let Ok(_guard) = lock.try_lock() {
-                        debug::native::info!("Generate dataset for stored epoch: {}", stored_epoch);
-                        let dataset = generate_dataset(stored_epoch, cache.as_slice(), &dataset_info);
-            debug::native::info!("Dataset Generation finished");
-                        Some(dataset)
-                    } else {
-            debug::native::info!("Generation still Locked..");
-                        // no work to be done here, until the dataset generation is complete.
-                        None
-                    };
-                    maybe_dataset
-                },
-            };
-
-            let dataset = match dataset {
-                Some(dataset) => dataset,
-                // this skips the current invocation, as there is another worker is generating the
-                // dataset.
-                None => {
-                    debug::native::info!("DAG Dataset generation already started..");
-                    return;
-                }
-            };
-
-            let should_generate_dataset = should_generate_dataset(header.number, stored_epoch);
-            debug::native::info!("Should we generate the dataset? {}", should_generate_dataset);
-            if should_generate_dataset {
-                // at this point we are sure that we have some dataset stored in either left or
-                // right.
-                // we will will generate the next epoch dataset and store it in the other end of
-                // the dataset, also we will lock here to avoid double generation.
-
-                // this the same lock used before to generate the first dataset, but we are 100%
-                // sure that the we have a dataset, so there will be no locking there.
-                let mut lock = StorageLock::<Time>::with_deadline(
-                    constants::storage_keys::DAG_DATASET_LOCK,
-                    dag_lock_time,
-                );
-                if let Ok(_guard) = lock.try_lock() {
-                    // if we are using the left side, we should store the next DAG Dataset in the
-                    // right, and the other way around.
-                    let key = if use_left {
-                        StorageValueRef::persistent(constants::storage_keys::RIGHT_DAG_DATASET)
-                    } else {
-                        StorageValueRef::persistent(constants::storage_keys::LEFT_DAG_DATASET)
-                    };
-                    let next_epoch = stored_epoch + 1;
-                    // this will generate and store the dataset in the key.
-                    generate_dataset(next_epoch, cache.as_slice(), &key);
-                };
-            }
-
             let latest_block_number = Self::last_block_number();
             let call = if header.number > latest_block_number {
                 if Self::initialized() {
-                    // FIXME(shekohex): we should also lock while generating the proofs.
-                    let proofs = generate_proofs(&header, &dataset, &cache);
-                    debug::native::info!("Adding header #: {:?}!", header.number);
-                    Some(Call::add_block_header(rlp_header, proofs))
+                    if let Some(proofs) = generate_proofs(&rlp_header) {
+                        debug::native::info!("Adding header #: {:?}!", header.number);
+                        Some(Call::add_block_header(rlp_header, proofs))
+                    } else {
+                        // it sounds that we can't generate the proofs for that header now.
+                        // push it back to the front of the queue.
+                        header_queue.push_front(header);
+                        None
+                    }
                 } else {
                     debug::native::info!("Initializing with header #: {:?}!", header.number);
-                    let dags_start_epoch: u64 = header.number.as_u64() / 30000;
+                    let dags_start_epoch = header.number.as_u64() / 30000;
                     Some(Call::init(
                         dags_start_epoch,
                         vec![],
@@ -548,8 +423,9 @@ decl_module! {
                 debug::native::info!("Skipping adding #: {:?}, already added!", header.number);
                 None
             };
-
+            header_queue_info.set(&header_queue);
             if let Some(c) = call {
+                debug::native::info!("send signed transaction with c: {:?}", c);
                 let result = signer.send_signed_transaction(|_acct| c.clone());
                 // Display error if the signed tx fails.
                 if let Some((acc, res)) = result {
@@ -558,69 +434,47 @@ decl_module! {
                     }
                     // Transaction is sent successfully
                 }
+            } else {
+                debug::native::info!("no calls to be sent ..");
             }
         }
     }
 }
 
-fn generate_dataset(
-    epoch: u64,
-    cache: &[u8],
-    key: &StorageValueRef,
-) -> Vec<u8> {
-    let dataset_size = ethash::get_full_size(epoch as usize);
-    let mut dataset = vec![0u8; dataset_size];
-    ethash::make_dataset(&mut dataset, &cache);
-    key.set(&dataset);
-    dataset
-}
-
-fn should_generate_dataset(block_number: U256, stored_epoch: u64) -> bool {
-    const ETH_PATCH_SIZE: u64 = 30_000;
-    const REGENERATION_THRESHOLD: u64 = ETH_PATCH_SIZE / 2;
-
-    let current_block_number = block_number.as_u64();
-    let last_block_number = (stored_epoch + 1) * ETH_PATCH_SIZE;
-    let diff = last_block_number
-        .checked_sub(current_block_number)
-        .unwrap_or(REGENERATION_THRESHOLD);
-    diff <= REGENERATION_THRESHOLD
-}
-
 fn generate_proofs(
-    header: &types::BlockHeader,
-    dataset: &[u8],
-    cache: &[u8],
-) -> Vec<DoubleNodeWithMerkleProof> {
-    let hash = ethash::seal_header(&BlockHeaderSeal::from(header.clone()));
-    let epoch = header.number.as_usize() / 30_000;
-    let full_size = ethash::get_full_size(epoch);
-    let indices = ethash::get_indices(hash, header.nonce, full_size, |i| {
-        let raw_data = ethash::calc_dataset_item(&cache, i);
-        let mut data = [0u32; 16];
-        for (i, b) in data.iter_mut().enumerate() {
-            *b = byteorder::LE::read_u32(&raw_data[(i * 4)..]);
-        }
-        data
-    });
-
-    let depth = ethash::calc_dataset_depth(epoch);
-    let tree = ethash::calc_dataset_merkle_proofs(epoch, &dataset);
-    let mut output = BlockWithProofs {
-        proof_length: depth as _,
-        merkle_root: H128(tree.hash().0),
-        elements: Vec::with_capacity(depth * 4),
-        merkle_proofs: Vec::with_capacity(depth * 2),
+    rlp_header: &[u8],
+) -> Option<Vec<DoubleNodeWithMerkleProof>> {
+    let rlp_hex = hex::encode(rlp_header);
+    let payload = ProofsPayload { rlp: rlp_hex };
+    let body = serde_json::to_vec(&payload);
+    let request = match http::Request::post(
+        "http://127.0.0.1:3000/proofs",
+        body,
+    )
+    .send()
+    {
+        Ok(handle) => handle,
+        Err(e) => {
+            debug::native::error!("http request failed: {:?}", e);
+            return None;
+        },
     };
-
-    for index in &indices {
-        let (element, _, proofs) = tree.generate_proof(*index as _, depth);
-        let els = element.into_h256_array();
-        output.elements.extend(&els);
-        let proofs = proofs.iter().map(|v| H128::from_slice(&v.0));
-        output.merkle_proofs.extend(proofs);
+    let response = match request.wait() {
+        Ok(res) => res,
+        Err(e) => {
+            debug::native::error!("http error: {:?}", e);
+            return None;
+        },
+    };
+    let status_code = response.code;
+    if status_code != 200 {
+        // server is not ready yet!
+        return None;
     }
-    output.to_double_node_with_merkle_proof_vec()
+    let body: Vec<u8> = response.body().collect();
+    let raw: BlockWithProofsRaw = serde_json::from_slice(&body).unwrap();
+    let output = BlockWithProofs::from(raw);
+    Some(output.to_double_node_with_merkle_proof_vec())
 }
 
 fn hex_to_bytes(v: &Vec<char>) -> Result<Vec<u8>, hex::FromHexError> {
@@ -728,7 +582,7 @@ impl<T: Config> Module<T> {
     fn truncate_to_h128(arr: H256) -> H128 {
         let mut data = [0u8; 16];
         data.copy_from_slice(&(arr.0)[16..]);
-        H128(data.into())
+        H128(data)
     }
 
     fn hash_h128(l: H128, r: H128) -> H128 {
