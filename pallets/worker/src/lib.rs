@@ -35,9 +35,6 @@ mod constants;
 mod types;
 use types::*;
 
-pub mod roots;
-pub use roots::roots;
-
 mod prover;
 #[cfg(test)]
 mod tests;
@@ -395,6 +392,7 @@ decl_module! {
             };
 
             if should_add_header {
+                debug::native::info!("Adding header #{} to the queue.", header.number);
                 // push the last header into the back of the queue.
                 header_queue.push_back(header);
             }
@@ -421,10 +419,9 @@ decl_module! {
                     }
                 } else {
                     debug::native::info!("Initializing with header #: {:?}!", header.number);
-                    let dags_start_epoch = header.number.as_u64() / 30000;
                     Some(Call::init(
-                        dags_start_epoch,
-                        vec![],
+                        constants::DAG_START_EPOCH,
+                        constants::ROOT_HASHES.clone(),
                         rlp_header,
                         U256::from(30),
                         U256::from(10),
@@ -448,8 +445,6 @@ decl_module! {
                 } else {
                     debug::native::info!("transaction sent but no result");
                 }
-            } else {
-                debug::native::info!("no calls to be sent ..");
             }
         }
     }
@@ -714,7 +709,11 @@ impl<T: Config> Module<T> {
         (H256(pair.0.into()), H256(pair.1.into()))
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn fetch_block_header() -> Result<types::BlockHeader, http::Error> {
+        // FIXME(@shekohex): we should not query for the latest block header
+        // we should query for next header for what we have.
+
         // Make a post request to an eth chain
         let body = br#"{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest", false],"id":1}"#;
         let request: http::Request = http::Request::post(
@@ -742,6 +741,7 @@ impl<T: Config> Module<T> {
         Ok(header)
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn fetch_proof(rlp_header: Vec<u8>) -> Result<Vec<u8>, http::Error> {
         // Make a post request to an eth chain
         let request: http::Request<Vec<&[u8]>> = http::Request::post(

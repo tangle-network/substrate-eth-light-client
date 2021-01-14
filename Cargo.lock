@@ -1295,7 +1295,7 @@ dependencies = [
 [[package]]
 name = "ethash"
 version = "0.4.1"
-source = "git+https://github.com/edgeware-builders/ethash?branch=rust-proof#02b548b033d951b6e5de487ec9d03886d6cd8da1"
+source = "git+https://github.com/edgeware-builders/ethash?branch=rust-proof#5715f42342e10185c6d3d674f021e1aa050bf168"
 dependencies = [
  "byteorder",
  "ethereum-types 0.9.2",
