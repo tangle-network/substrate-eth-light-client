@@ -21,7 +21,6 @@ use sp_runtime::{
         ValidTransaction,
     },
 };
-use sp_std::collections::vec_deque::VecDeque;
 use sp_std::prelude::*;
 
 use ethash::{EthereumPatch, LightDAG};
@@ -36,6 +35,10 @@ mod types;
 use types::*;
 
 mod prover;
+
+mod blocks_queue;
+use blocks_queue::{BlockQueue, Infura};
+
 #[cfg(test)]
 mod tests;
 
@@ -240,6 +243,7 @@ decl_module! {
                 parent_hash: header.parent_hash,
                 number: header.number,
             });
+            debug::native::info!("module init with header block #{}", header.number);
             debug::native::info!("module is ready ..");
         }
 
@@ -260,6 +264,7 @@ decl_module! {
                     "Eth-client is deployed as trust mode, only trusted_signer can add a new header"
                 );
             } else {
+                debug::native::debug!("trying to find header #{} parent", header.number);
                 let prev = Self::headers(header.parent_hash)
                     .expect("Parent header should be present to add a new header");
                 ensure!(
@@ -296,6 +301,7 @@ decl_module! {
 
                     // Record full information about this header.
                     <Headers>::insert(header_hash, header.clone());
+                    debug::native::debug!("Header #{} added", header.number);
                     let info = HeaderInfo {
                         total_difficulty: parent_info.total_difficulty + header.difficulty,
                         parent_hash: header.parent_hash,
@@ -374,31 +380,18 @@ decl_module! {
             let header_queue_info = StorageValueRef::persistent(
                 constants::storage_keys::BLOCKS_QUEUE,
             );
-            let mut header_queue = match header_queue_info.get::<VecDeque<types::BlockHeader>>() {
+            let mut header_queue = match header_queue_info.get::<BlockQueue<Infura>>() {
                 Some(queue) => queue.unwrap(),
-                None => VecDeque::new(),
+                None => BlockQueue::with_fetcher(Infura),
             };
 
-            let header: types::BlockHeader = Self::fetch_block_header().unwrap();
-
-            // we check if we already pushed this header into the queue.
-            // so we avoid having double headers.
-            let should_add_header = if let Some(h) = header_queue.pop_back() {
-                let v = h.number != header.number;
-                header_queue.push_back(h);
-                v
-            } else {
-                true
+            let header = match header_queue.fetch_next_block() {
+                Ok(block) => block,
+                Err(err) => {
+                    debug::native::error!("Block queue error: {:?}", err);
+                    return;
+                }
             };
-
-            if should_add_header {
-                debug::native::info!("Adding header #{} to the queue.", header.number);
-                // push the last header into the back of the queue.
-                header_queue.push_back(header);
-            }
-            // now get the header in the front of the queue.
-            let header = header_queue.pop_front().expect("queue must have at least one header");
-
             let mut stream = RlpStream::new();
             Self::rlp_append(header.clone(), &mut stream);
             let rlp_header: Vec<u8> = stream.out();

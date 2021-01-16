@@ -16,6 +16,54 @@ use alloc::string::String;
 use sp_runtime::RuntimeDebug;
 use tiny_keccak::{Hasher, Keccak};
 
+// TODO(shekohex) clean up the following code
+// add a trait for doing this work.
+
+fn hex_to_h256(v: String) -> H256 {
+    let s = &mut v[2..].as_bytes().to_vec();
+    if s.len() % 2 != 0 {
+        s.push(b'0');
+    }
+    let b = hex::decode(&s).unwrap();
+    H256::from_slice(&b)
+}
+
+fn hex_to_h64(v: String) -> H64 {
+    let s = &mut v[2..].as_bytes().to_vec();
+    if s.len() % 2 != 0 {
+        s.push(b'0');
+    }
+    let b = hex::decode(&s).unwrap();
+    H64::from_slice(&b)
+}
+
+fn hex_to_u256(v: String) -> U256 {
+    let s = &mut v[2..].as_bytes().to_vec();
+    if s.len() % 2 != 0 {
+        s.push(b'0');
+    }
+    let b = hex::decode(&s).unwrap();
+    U256::from_big_endian(&b)
+}
+
+fn hex_to_bloom(v: String) -> Bloom {
+    let s = &mut v[2..].as_bytes().to_vec();
+    if s.len() % 2 != 0 {
+        s.push(b'0');
+    }
+    let b = hex::decode(&s).unwrap();
+    Bloom::from_slice(&b)
+}
+
+fn hex_to_address(v: String) -> Address {
+    let s = &mut v[2..].as_bytes().to_vec();
+    if s.len() % 2 != 0 {
+        s.push(b'0');
+    }
+    let b = hex::decode(&s).unwrap();
+    Address::from_slice(&b)
+}
+
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct BlockHeader {
     pub parent_hash: H256,
@@ -36,6 +84,29 @@ pub struct BlockHeader {
 
     pub hash: Option<H256>,
     pub partial_hash: Option<H256>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InfuraBlockHeader {
+    pub difficulty: String,
+    pub extra_data: String,
+    pub gas_limit: String,
+    pub gas_used: String,
+    pub hash: String,
+    pub logs_bloom: String,
+    pub miner: String,
+    pub mix_hash: String,
+    pub nonce: String,
+    pub number: String,
+    pub parent_hash: String,
+    pub receipts_root: String,
+    pub sha3_uncles: String,
+    pub size: String,
+    pub state_root: String,
+    pub timestamp: String,
+    pub total_difficulty: String,
+    pub transactions_root: String,
 }
 
 #[derive(Debug, Clone)]
@@ -75,7 +146,55 @@ impl From<BlockHeader> for BlockHeaderSeal {
     }
 }
 
+impl From<InfuraBlockHeader> for BlockHeader {
+    fn from(b: InfuraBlockHeader) -> Self {
+        debug::native::info!("{:?}", b);
+        Self {
+            parent_hash: hex_to_h256(b.parent_hash),
+            uncles_hash: hex_to_h256(b.sha3_uncles),
+            number: hex_to_u256(b.number),
+            author: hex_to_address(b.miner),
+            state_root: hex_to_h256(b.state_root),
+            transactions_root: hex_to_h256(b.transactions_root),
+            receipts_root: hex_to_h256(b.receipts_root),
+            log_bloom: hex_to_bloom(b.logs_bloom),
+            difficulty: hex_to_u256(b.difficulty),
+            gas_limit: hex_to_u256(b.gas_limit).as_u64(),
+            gas_used: hex_to_u256(b.gas_used).as_u64(),
+            timestamp: hex_to_u256(b.timestamp).as_u64(),
+            extra_data: b.extra_data.as_bytes().to_vec(),
+            mix_hash: hex_to_h256(b.mix_hash),
+            nonce: hex_to_h64(b.nonce),
+            hash: None,
+            partial_hash: None,
+        }
+    }
+}
+
 impl BlockHeader {
+    #[cfg(test)]
+    pub fn mock_with(number: u64) -> Self {
+        Self {
+            parent_hash: H256::random(),
+            uncles_hash: H256::random(),
+            author: Address::random(),
+            state_root: H256::random(),
+            transactions_root: H256::random(),
+            receipts_root: H256::random(),
+            log_bloom: Bloom::random(),
+            difficulty: U256::MAX,
+            number: U256::from(number),
+            gas_limit: 1000,
+            gas_used: 100,
+            timestamp: 1610749011,
+            extra_data: b"Mocked data for tests".to_vec(),
+            mix_hash: H256::random(),
+            nonce: H64::random(),
+            hash: None,
+            partial_hash: None,
+        }
+    }
+
     pub fn extra_data(&self) -> H256 {
         let mut data = [0u8; 32];
         data.copy_from_slice(&self.extra_data);
