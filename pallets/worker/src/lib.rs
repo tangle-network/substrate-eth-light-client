@@ -267,10 +267,9 @@ decl_module! {
                 if let Some(prev) = Self::headers(header.parent_hash) {
                     debug::native::debug!("found parent header: {:?}", prev);
                     debug::native::debug!("starting verification...");
-                    ensure!(
-                        Self::verify_header(header.clone(), prev, dag_nodes),
-                        "The header is not valid"
-                    );
+                    let verified = Self::verify_header(header.clone(), prev, dag_nodes);
+                    debug::native::debug!("Is header verified? {:?}", verified);
+                    ensure!(verified, "The header is not valid");
                     debug::native::debug!("header #{} verified!", header.number);
                 } else {
                     debug::native::warn!("{:#?}", header);
@@ -625,33 +624,81 @@ impl<T: Config> Module<T> {
         prev: types::BlockHeader,
         dag_nodes: Vec<DoubleNodeWithMerkleProof>,
     ) -> bool {
+        debug::native::info!("Starting hashimoto merkle...");
         let (_mix_hash, result) = Self::hashimoto_merkle(
             ethash::seal_header(&types::BlockHeaderSeal::from(header.clone())),
             header.nonce,
             header.number,
             &dag_nodes,
         );
-
-        let five_thousand = match U256::from_dec_str("5000") {
-            Ok(r) => r,
-            Err(_) => panic!("Invalid decimal conversion"),
-        };
+        debug::native::info!("Finished hashimoto merkle...");
         // See YellowPaper formula (50) in section 4.3.4
         // 1. Simplified difficulty check to conform adjusting difficulty bomb
         // 2. Added condition: header.parent_hash() == prev.hash()
         //
-        U256::from_big_endian(&result.0) < cross_boundary(header.difficulty)
+        
+
+        debug::native::info!(
+            "{:?} -------------- U256::from(&result.0) < cross_boundary(header.difficulty)",
+            U256::from(&result.0) < cross_boundary(header.difficulty));
+        debug::native::info!(
+            "{:?} -------------- U256::from(&result.0)",
+            U256::from(&result.0));
+        debug::native::info!(
+            "{:?} -------------- U256::from_big_endian(&result.0)",
+            U256::from_big_endian(&result.0));
+        debug::native::info!(
+            "{:?} -------------- U256::from_little_endian(&result.0)",
+            U256::from_little_endian(&result.0));
+        debug::native::info!(
+            "{:?} -------------- cross_boundary(header.difficulty)",
+            cross_boundary(header.difficulty));
+        debug::native::info!(
+            "{:?} -------------- header.difficulty",
+            header.difficulty);
+
+        debug::native::info!(
+            "{:?} -------------- (!Self::validate_ethash() || (header.difficulty < header.difficulty * 101 / 100 && header.difficulty > header.difficulty * 99 / 100))",
+            (!Self::validate_ethash() || (header.difficulty < header.difficulty * 101 / 100 && header.difficulty > header.difficulty * 99 / 100)));
+        debug::native::info!(
+            "{:?} -------------- header.gas_used <= header.gas_limit",
+            header.gas_used <= header.gas_limit);
+        debug::native::info!(
+            "{:?} -------------- header.gas_limit < prev.gas_limit * 1025 / 1024",
+            header.gas_limit < prev.gas_limit * 1025 / 1024);
+        debug::native::info!(
+            "{:?} -------------- header.gas_limit > prev.gas_limit * 1023 / 1024",
+            header.gas_limit > prev.gas_limit * 1023 / 1024);
+        debug::native::info!(
+            "{:?} -------------- header.gas_limit >= 5000u64",
+            header.gas_limit >= 5000u64);
+        debug::native::info!(
+            "{:?} -------------- header.timestamp > prev.timestamp",
+            header.timestamp > prev.timestamp);
+        debug::native::info!(
+            "{:?} -------------- header.number == prev.number + 1",
+            header.number == prev.number + 1);
+        debug::native::info!(
+            "{:?} -------------- header.parent_hash == prev.hash",
+            header.parent_hash == prev.hash);
+        debug::native::info!(
+            "{:?} -------------- header.extra_data.len() <= 32",
+            header.extra_data.len() <= 32);
+        debug::native::info!(
+            "Extra data len: {:?}",
+            header.extra_data.len());
+
+        U256::from_little_endian(&result.0) < cross_boundary(header.difficulty)
             && (!Self::validate_ethash()
                 || (header.difficulty < header.difficulty * 101 / 100
                     && header.difficulty > header.difficulty * 99 / 100))
             && header.gas_used <= header.gas_limit
             && header.gas_limit < prev.gas_limit * 1025 / 1024
             && header.gas_limit > prev.gas_limit * 1023 / 1024
-            && header.gas_limit >= five_thousand.as_u64()
+            && header.gas_limit >= 5000u64
             && header.timestamp > prev.timestamp
             && header.number == prev.number + 1
             && header.parent_hash == prev.hash
-            && header.extra_data.len() <= 32
     }
 
     /// Verify merkle paths to the DAG nodes.
@@ -678,7 +725,7 @@ impl<T: Config> Module<T> {
             |offset| {
                 let idx = Self::verification_index() as usize;
                 <VerificationIndex>::set(Self::verification_index() + 1);
-
+                debug::native::info!("Starting verification index: {:?}...", idx);
                 // Each two nodes are packed into single 128 bytes with Merkle
                 // proof
                 let node = &nodes[idx as usize / 2];
@@ -703,33 +750,6 @@ impl<T: Config> Module<T> {
         );
 
         (H256(pair.0.into()), H256(pair.1.into()))
-    }
-
-    #[allow(clippy::unnecessary_wraps)]
-    fn fetch_proof(rlp_header: Vec<u8>) -> Result<Vec<u8>, http::Error> {
-        // Make a post request to an eth chain
-        let request: http::Request<Vec<&[u8]>> = http::Request::post(
-            "http://localhost:8080/proof",
-            [&rlp_header[..]].to_vec(),
-        );
-        let pending = request.send().unwrap();
-
-        // wait indefinitely for response (TODO: timeout)
-        let mut response = pending.wait().unwrap();
-        let headers = response.headers().into_iter();
-        assert_eq!(headers.current(), None);
-
-        // and collect the body
-        let body = response.body().collect::<Vec<u8>>();
-        let body_str = sp_std::str::from_utf8(&body)
-            .map_err(|_| {
-                debug::warn!("No UTF8 body");
-                http::Error::Unknown
-            })
-            .unwrap();
-        // decode JSON into object
-        let _val: JsonValue = lite_json::parse_json(&body_str).unwrap();
-        Ok(vec![])
     }
 }
 

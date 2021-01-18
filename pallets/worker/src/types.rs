@@ -46,6 +46,15 @@ fn hex_to_u256(v: String) -> U256 {
     U256::from_big_endian(&b)
 }
 
+fn hex_to_u256_le(v: String) -> U256 {
+    let s = &mut v[2..].as_bytes().to_vec();
+    if s.len() % 2 != 0 {
+        s.push(b'0');
+    }
+    let b = hex::decode(&s).unwrap();
+    U256::from_little_endian(&b)
+}
+
 fn hex_to_bloom(v: String) -> Bloom {
     let s = &mut v[2..].as_bytes().to_vec();
     if s.len() % 2 != 0 {
@@ -156,7 +165,7 @@ impl From<InfuraBlockHeader> for BlockHeader {
             transactions_root: hex_to_h256(b.transactions_root),
             receipts_root: hex_to_h256(b.receipts_root),
             log_bloom: hex_to_bloom(b.logs_bloom),
-            difficulty: hex_to_u256(b.difficulty),
+            difficulty: hex_to_u256_le(b.difficulty),
             gas_limit: hex_to_u256(b.gas_limit).as_u64(),
             gas_used: hex_to_u256(b.gas_used).as_u64(),
             timestamp: hex_to_u256(b.timestamp).as_u64(),
