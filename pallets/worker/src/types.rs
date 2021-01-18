@@ -64,7 +64,7 @@ fn hex_to_address(v: String) -> Address {
     Address::from_slice(&b)
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BlockHeader {
     pub parent_hash: H256,
     pub uncles_hash: H256,
@@ -81,9 +81,24 @@ pub struct BlockHeader {
     pub extra_data: Vec<u8>,
     pub mix_hash: H256,
     pub nonce: H64,
+    pub hash: H256,
+}
 
-    pub hash: Option<H256>,
-    pub partial_hash: Option<H256>,
+#[derive(Debug, Clone)]
+pub struct BlockHeaderSeal {
+    pub parent_hash: H256,
+    pub uncles_hash: H256,
+    pub author: Address,
+    pub state_root: H256,
+    pub transactions_root: H256,
+    pub receipts_root: H256,
+    pub log_bloom: Bloom,
+    pub difficulty: U256,
+    pub number: U256,
+    pub gas_limit: u64,
+    pub gas_used: u64,
+    pub timestamp: u64,
+    pub extra_data: Vec<u8>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -107,23 +122,6 @@ pub struct InfuraBlockHeader {
     pub timestamp: String,
     pub total_difficulty: String,
     pub transactions_root: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct BlockHeaderSeal {
-    pub parent_hash: H256,
-    pub uncles_hash: H256,
-    pub author: Address,
-    pub state_root: H256,
-    pub transactions_root: H256,
-    pub receipts_root: H256,
-    pub log_bloom: Bloom,
-    pub difficulty: U256,
-    pub number: U256,
-    pub gas_limit: u64,
-    pub gas_used: u64,
-    pub timestamp: u64,
-    pub extra_data: Vec<u8>,
 }
 
 impl From<BlockHeader> for BlockHeaderSeal {
@@ -165,8 +163,7 @@ impl From<InfuraBlockHeader> for BlockHeader {
             extra_data: b.extra_data.as_bytes().to_vec(),
             mix_hash: hex_to_h256(b.mix_hash),
             nonce: hex_to_h64(b.nonce),
-            hash: None,
-            partial_hash: None,
+            hash: hex_to_h256(b.hash),
         }
     }
 }
@@ -190,8 +187,7 @@ impl BlockHeader {
             extra_data: b"Mocked data for tests".to_vec(),
             mix_hash: H256::random(),
             nonce: H64::random(),
-            hash: None,
-            partial_hash: None,
+            hash: H256::random(),
         }
     }
 
@@ -201,8 +197,8 @@ impl BlockHeader {
         H256(data)
     }
 
-    fn stream_rlp(&self, stream: &mut RlpStream, partial: bool) {
-        stream.begin_list(13 + if !partial { 2 } else { 0 });
+    fn stream_rlp(&self, stream: &mut RlpStream) {
+        stream.begin_list(16);
 
         stream.append(&self.parent_hash);
         stream.append(&self.uncles_hash);
@@ -217,17 +213,38 @@ impl BlockHeader {
         stream.append(&self.gas_used);
         stream.append(&self.timestamp);
         stream.append(&self.extra_data);
-
-        if !partial {
-            stream.append(&self.mix_hash);
-            stream.append(&self.nonce);
-        }
+        stream.append(&self.mix_hash);
+        stream.append(&self.nonce);
+        stream.append(&self.hash);
     }
 }
 
 impl RlpEncodable for BlockHeader {
-    fn rlp_append(&self, stream: &mut RlpStream) {
-        self.stream_rlp(stream, false);
+    fn rlp_append(&self, stream: &mut RlpStream) { self.stream_rlp(stream); }
+}
+
+impl RlpDecodable for BlockHeader {
+    fn decode(serialized: &Rlp) -> Result<Self, RlpDecoderError> {
+        let block_header = BlockHeader {
+            parent_hash: serialized.val_at(0)?,
+            uncles_hash: serialized.val_at(1)?,
+            author: serialized.val_at(2)?,
+            state_root: serialized.val_at(3)?,
+            transactions_root: serialized.val_at(4)?,
+            receipts_root: serialized.val_at(5)?,
+            log_bloom: serialized.val_at(6)?,
+            difficulty: serialized.val_at(7)?,
+            number: serialized.val_at(8)?,
+            gas_limit: serialized.val_at(9)?,
+            gas_used: serialized.val_at(10)?,
+            timestamp: serialized.val_at(11)?,
+            extra_data: serialized.val_at(12)?,
+            mix_hash: serialized.val_at(13)?,
+            nonce: serialized.val_at(14)?,
+            hash: serialized.val_at(15)?,
+        };
+
+        Ok(block_header)
     }
 }
 
@@ -248,41 +265,6 @@ impl RlpEncodable for BlockHeaderSeal {
         stream.append(&self.gas_used);
         stream.append(&self.timestamp);
         stream.append(&self.extra_data);
-    }
-}
-
-impl RlpDecodable for BlockHeader {
-    fn decode(serialized: &Rlp) -> Result<Self, RlpDecoderError> {
-        let mut block_header = BlockHeader {
-            parent_hash: serialized.val_at(0)?,
-            uncles_hash: serialized.val_at(1)?,
-            author: serialized.val_at(2)?,
-            state_root: serialized.val_at(3)?,
-            transactions_root: serialized.val_at(4)?,
-            receipts_root: serialized.val_at(5)?,
-            log_bloom: serialized.val_at(6)?,
-            difficulty: serialized.val_at(7)?,
-            number: serialized.val_at(8)?,
-            gas_limit: serialized.val_at(9)?,
-            gas_used: serialized.val_at(10)?,
-            timestamp: serialized.val_at(11)?,
-            extra_data: serialized.val_at(12)?,
-            mix_hash: serialized.val_at(13)?,
-            nonce: serialized.val_at(14)?,
-            hash: Some(keccak256(serialized.as_raw()).into()),
-            partial_hash: None,
-        };
-
-        block_header.partial_hash = Some(
-            keccak256({
-                let mut stream = RlpStream::new();
-                block_header.stream_rlp(&mut stream, true);
-                stream.out().as_slice()
-            })
-            .into(),
-        );
-
-        Ok(block_header)
     }
 }
 

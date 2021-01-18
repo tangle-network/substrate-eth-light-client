@@ -1,5 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
-#![allow(clippy::too_many_arguments)]
+#![allow(clippy::too_many_arguments, clippy::large_enum_variant)]
 
 use codec::{Decode, Encode};
 use frame_support::{
@@ -24,9 +24,8 @@ use sp_runtime::{
 use sp_std::prelude::*;
 
 use ethash::{EthereumPatch, LightDAG};
-use ethereum_types::{Bloom, H128, H160, H256, H512, H64, U256};
+use ethereum_types::{H128, H256, H512, H64, U256};
 use lite_json::json::JsonValue;
-use rlp::RlpStream;
 use sp_io::hashing::{keccak_256, sha2_256};
 
 mod constants;
@@ -210,7 +209,7 @@ decl_module! {
             origin,
             dags_start_epoch: u64,
             dags_merkle_roots: Vec<H128>,
-            first_header: Vec<u8>,
+            first_header: BlockHeader,
             hashes_gc_threshold: U256,
             finalized_gc_threshold: U256,
             num_confirmations: U256,
@@ -230,20 +229,20 @@ decl_module! {
             <NumConfirmations>::set(Some(num_confirmations));
             <TrustedSigner<T>>::set(trusted_signer);
 
-            let header: types::BlockHeader = rlp::decode(first_header.as_slice()).unwrap();
-            let header_hash = header.hash.unwrap();
-            let header_number = header.number;
+            let header_hash = first_header.hash;
+            let header_number = first_header.number;
 
             <BestHeaderHash>::set(header_hash);
             <AllHeaderHashes>::insert(header_number, vec![header_hash]);
             <CanonicalHeaderHashes>::insert(header_number, header_hash);
-            <Headers>::insert(header_hash, header.clone());
+            <Headers>::insert(header_hash, first_header.clone());
+            debug::native::debug!("Added: {:#?}", first_header);
             <Infos>::insert(header_hash, HeaderInfo {
-                total_difficulty: header.difficulty,
-                parent_hash: header.parent_hash,
-                number: header.number,
+                total_difficulty: first_header.difficulty,
+                parent_hash: first_header.parent_hash,
+                number: first_header.number,
             });
-            debug::native::info!("module init with header block #{}", header.number);
+            debug::native::info!("module init with header block #{}", first_header.number);
             debug::native::info!("module is ready ..");
         }
 
@@ -253,11 +252,11 @@ decl_module! {
         #[weight = 0]
         pub fn add_block_header(
             origin,
-            block_header: Vec<u8>,
+            block_header: BlockHeader,
             dag_nodes: Vec<DoubleNodeWithMerkleProof>,
         ) {
             let _signer = ensure_signed(origin)?;
-            let header: types::BlockHeader = rlp::decode(block_header.as_slice()).unwrap();
+            let header: types::BlockHeader = block_header;
             if let Some(trusted_signer) = Self::trusted_signer() {
                 ensure!(
                     _signer == trusted_signer,
@@ -265,12 +264,18 @@ decl_module! {
                 );
             } else {
                 debug::native::debug!("trying to find header #{} parent", header.number);
-                let prev = Self::headers(header.parent_hash)
-                    .expect("Parent header should be present to add a new header");
-                ensure!(
-                    Self::verify_header(header.clone(), prev, dag_nodes),
-                    "The header is not valid"
-                );
+                if let Some(prev) = Self::headers(header.parent_hash) {
+                    debug::native::debug!("found parent header: {:?}", prev);
+                    debug::native::debug!("starting verification...");
+                    ensure!(
+                        Self::verify_header(header.clone(), prev, dag_nodes),
+                        "The header is not valid"
+                    );
+                    debug::native::debug!("header #{} verified!", header.number);
+                } else {
+                    debug::native::warn!("{:#?}", header);
+                    panic!("parent_hash not found for header #{}", header.number);
+                }
             }
 
             let finalized_gc_threshold = match Self::finalized_gc_threshold() {
@@ -284,7 +289,7 @@ decl_module! {
             };
 
             if let Some(best_info) = Self::infos(Self::best_header_hash()) {
-                let header_hash = header.hash.unwrap();
+                let header_hash = header.hash;
                 let header_number = header.number;
                 if header_number + finalized_gc_threshold < best_info.number {
                     panic!("Header is too old to have a chance to appear on the canonical chain.");
@@ -392,18 +397,15 @@ decl_module! {
                     return;
                 }
             };
-            let mut stream = RlpStream::new();
-            Self::rlp_append(header.clone(), &mut stream);
-            let rlp_header: Vec<u8> = stream.out();
 
             let signer = Signer::<T, T::AuthorityId>::any_account();
 
             let latest_block_number = Self::last_block_number();
             let call = if header.number > latest_block_number {
                 if Self::initialized() {
-                    if let Some(proofs) = generate_proofs(&rlp_header) {
+                    if let Some(proofs) = generate_proofs(&header) {
                         debug::native::info!("Adding header #: {:?}!", header.number);
-                        Some(Call::add_block_header(rlp_header, proofs))
+                        Some(Call::add_block_header(header, proofs))
                     } else {
                         // it sounds that we can't generate the proofs for that header now.
                         // push it back to the front of the queue.
@@ -415,7 +417,7 @@ decl_module! {
                     Some(Call::init(
                         constants::DAG_START_EPOCH,
                         constants::ROOT_HASHES.clone(),
-                        rlp_header,
+                        header,
                         U256::from(30),
                         U256::from(10),
                         U256::from(10),
@@ -444,8 +446,9 @@ decl_module! {
 }
 
 fn generate_proofs(
-    rlp_header: &[u8],
+    header: &BlockHeader,
 ) -> Option<Vec<DoubleNodeWithMerkleProof>> {
+    let rlp_header = rlp::encode(header);
     let rlp_hex = hex::encode(rlp_header);
     let payload = ProofsPayload { rlp: rlp_hex };
     let body = serde_json::to_vec(&payload);
@@ -623,7 +626,7 @@ impl<T: Config> Module<T> {
         dag_nodes: Vec<DoubleNodeWithMerkleProof>,
     ) -> bool {
         let (_mix_hash, result) = Self::hashimoto_merkle(
-            header.partial_hash.unwrap(),
+            ethash::seal_header(&types::BlockHeaderSeal::from(header.clone())),
             header.nonce,
             header.number,
             &dag_nodes,
@@ -647,7 +650,7 @@ impl<T: Config> Module<T> {
             && header.gas_limit >= five_thousand.as_u64()
             && header.timestamp > prev.timestamp
             && header.number == prev.number + 1
-            && header.parent_hash == prev.hash.unwrap()
+            && header.parent_hash == prev.hash
             && header.extra_data.len() <= 32
     }
 
@@ -703,38 +706,6 @@ impl<T: Config> Module<T> {
     }
 
     #[allow(clippy::unnecessary_wraps)]
-    fn fetch_block_header() -> Result<types::BlockHeader, http::Error> {
-        // FIXME(@shekohex): we should not query for the latest block header
-        // we should query for next header for what we have.
-
-        // Make a post request to an eth chain
-        let body = br#"{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest", false],"id":1}"#;
-        let request: http::Request = http::Request::post(
-            "https://mainnet.infura.io/v3/b5f870422ee5454fb11937e947154cd2",
-            [&body[..]].to_vec(),
-        );
-        let pending = request.send().unwrap();
-
-        // wait indefinitely for response (TODO: timeout)
-        let mut response = pending.wait().unwrap();
-        let headers = response.headers().into_iter();
-        assert_eq!(headers.current(), None);
-
-        // and collect the body
-        let body = response.body().collect::<Vec<u8>>();
-        let body_str = sp_std::str::from_utf8(&body)
-            .map_err(|_| {
-                debug::warn!("No UTF8 body");
-                http::Error::Unknown
-            })
-            .unwrap();
-        // decode JSON into object
-        let val: JsonValue = lite_json::parse_json(&body_str).unwrap();
-        let header: types::BlockHeader = Self::json_to_rlp(val);
-        Ok(header)
-    }
-
-    #[allow(clippy::unnecessary_wraps)]
     fn fetch_proof(rlp_header: Vec<u8>) -> Result<Vec<u8>, http::Error> {
         // Make a post request to an eth chain
         let request: http::Request<Vec<&[u8]>> = http::Request::post(
@@ -759,227 +730,6 @@ impl<T: Config> Module<T> {
         // decode JSON into object
         let _val: JsonValue = lite_json::parse_json(&body_str).unwrap();
         Ok(vec![])
-    }
-
-    pub fn rlp_append(header: types::BlockHeader, stream: &mut RlpStream) {
-        stream.begin_list(15);
-        stream.append(&header.parent_hash);
-        stream.append(&header.uncles_hash);
-        stream.append(&header.author);
-        stream.append(&header.state_root);
-        stream.append(&header.transactions_root);
-        stream.append(&header.receipts_root);
-        stream.append(&header.log_bloom);
-        stream.append(&header.difficulty);
-        stream.append(&header.number);
-        stream.append(&header.gas_limit);
-        stream.append(&header.gas_used);
-        stream.append(&header.timestamp);
-        stream.append(&header.extra_data);
-        stream.append(&header.mix_hash);
-        stream.append(&header.nonce);
-    }
-
-    pub fn json_to_rlp(json: JsonValue) -> types::BlockHeader {
-        // get { "result": VAL }
-        let block: Option<Vec<(Vec<char>, JsonValue)>> = match json {
-            JsonValue::Object(obj) => obj
-                .into_iter()
-                .find(|(k, _)| {
-                    k.iter().map(|c| *c as u8).collect::<Vec<u8>>()
-                        == b"result".to_vec()
-                })
-                .and_then(|v| match v.1 {
-                    JsonValue::Object(block) => Some(block),
-                    _ => None,
-                }),
-            _ => None,
-        };
-
-        // debug::native::info!("Decoding difficulty!");
-        let decoded_difficulty_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"difficulty".to_vec(),
-        );
-        let difficulty = U256::from_big_endian(&decoded_difficulty_hex[..]);
-
-        // debug::native::info!("Decoding extra_data!");
-        let decoded_extra_data_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"extraData".to_vec(),
-        );
-
-        // debug::native::info!("Decoding gas_limit!");
-        let decoded_gas_limit_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"gasLimit".to_vec(),
-        );
-        let gas_limit = U256::from_big_endian(&decoded_gas_limit_hex[..]);
-
-        // debug::native::info!("Decoding gas_used!");
-        let decoded_gas_used_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"gasUsed".to_vec(),
-        );
-        let gas_used = U256::from_big_endian(&decoded_gas_used_hex[..]);
-
-        // debug::native::info!("Decoding hash!");
-        let decoded_hash_hex =
-            Self::extract_property_from_block(block.clone(), b"hash".to_vec());
-        let mut temp_hash = [0; 32];
-        for i in 0..decoded_hash_hex.len() {
-            temp_hash[i] = decoded_hash_hex[i];
-        }
-        let hash = H256::from(temp_hash);
-
-        // debug::native::info!("Decoding logs_bloom!");
-        let decoded_logs_bloom_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"logsBloom".to_vec(),
-        );
-        let mut temp_logs_bloom = [0; 256];
-        for i in 0..decoded_logs_bloom_hex.len() {
-            temp_logs_bloom[i] = decoded_logs_bloom_hex[i];
-        }
-        let logs_bloom = Bloom::from(temp_logs_bloom);
-
-        // debug::native::info!("Decoding miner!");
-        let decoded_miner_hex =
-            Self::extract_property_from_block(block.clone(), b"miner".to_vec());
-        let mut temp_miner = [0; 20];
-        for i in 0..decoded_miner_hex.len() {
-            temp_miner[i] = decoded_miner_hex[i];
-        }
-        let miner = H160::from(temp_miner);
-
-        // debug::native::info!("Decoding mix_hash!");
-        let decoded_mix_hash_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"mixHash".to_vec(),
-        );
-        let mut temp_mix_hash = [0; 32];
-        for i in 0..decoded_mix_hash_hex.len() {
-            temp_mix_hash[i] = decoded_mix_hash_hex[i];
-        }
-        let mix_hash = H256::from(temp_mix_hash);
-
-        // debug::native::info!("Decoding nonce!");
-        let decoded_nonce_hex =
-            Self::extract_property_from_block(block.clone(), b"nonce".to_vec());
-        let mut temp_nonce = [0; 8];
-        for i in 0..decoded_nonce_hex.len() {
-            temp_nonce[i] = decoded_nonce_hex[i];
-        }
-        let nonce = H64::from(temp_nonce);
-
-        // debug::native::info!("Decoding number!");
-        let decoded_number_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"number".to_vec(),
-        );
-        let number = U256::from_big_endian(&decoded_number_hex[..]).as_u64();
-
-        // debug::native::info!("Decoding parent_hash!");
-        let decoded_parent_hash_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"parentHash".to_vec(),
-        );
-        let mut temp_parent_hash = [0; 32];
-        for i in 0..decoded_parent_hash_hex.len() {
-            temp_parent_hash[i] = decoded_parent_hash_hex[i];
-        }
-        let parent_hash = H256::from(temp_parent_hash);
-
-        // debug::native::info!("Decoding receipts_root!");
-        let decoded_receipts_root_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"receiptsRoot".to_vec(),
-        );
-        let mut temp_receipts_root = [0; 32];
-        for i in 0..decoded_receipts_root_hex.len() {
-            temp_receipts_root[i] = decoded_receipts_root_hex[i];
-        }
-        let receipts_root = H256::from(temp_receipts_root);
-
-        // debug::native::info!("Decoding sha3_uncles!");
-        let decoded_sha3_uncles_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"sha3Uncles".to_vec(),
-        );
-        let mut temp_sha3_uncles = [0; 32];
-        for i in 0..decoded_sha3_uncles_hex.len() {
-            temp_sha3_uncles[i] = decoded_sha3_uncles_hex[i];
-        }
-        let uncles_hash = H256::from(temp_sha3_uncles);
-
-        // debug::native::info!("Decoding state_root!");
-        let decoded_state_root_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"stateRoot".to_vec(),
-        );
-        let mut temp_state_root = [0; 32];
-        for i in 0..decoded_state_root_hex.len() {
-            temp_state_root[i] = decoded_state_root_hex[i];
-        }
-        let state_root = H256::from(temp_state_root);
-
-        // debug::native::info!("Decoding transactions_root!");
-        let decoded_transactions_root_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"transactionsRoot".to_vec(),
-        );
-        let mut temp_transactions_root = [0; 32];
-        for i in 0..decoded_transactions_root_hex.len() {
-            temp_transactions_root[i] = decoded_transactions_root_hex[i];
-        }
-        let transactions_root = H256::from(temp_transactions_root);
-
-        // debug::native::info!("Decoding timestamp!");
-        let decoded_timestamp_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"timestamp".to_vec(),
-        );
-        let timestamp =
-            U256::from_big_endian(&decoded_timestamp_hex[..]).as_u64();
-
-        types::BlockHeader {
-            parent_hash,
-            uncles_hash,
-            author: miner,
-            state_root,
-            transactions_root,
-            receipts_root,
-            log_bloom: logs_bloom,
-            difficulty,
-            number: number.into(),
-            gas_limit: gas_limit.as_u64(),
-            gas_used: gas_used.as_u64(),
-            timestamp,
-            extra_data: decoded_extra_data_hex,
-            mix_hash,
-            nonce,
-            hash: Some(hash),
-            partial_hash: None,
-        }
-    }
-
-    pub fn extract_property_from_block(
-        block: Option<Vec<(Vec<char>, JsonValue)>>,
-        property: Vec<u8>,
-    ) -> Vec<u8> {
-        let extracted_hex: Vec<char> = block
-            .unwrap()
-            .into_iter()
-            .find(|(k, _)| {
-                k.iter().map(|c| *c as u8).collect::<Vec<u8>>() == property
-            })
-            .and_then(|v| match v.1 {
-                JsonValue::String(n) => Some(n),
-                _ => None,
-            })
-            .unwrap();
-        let decoded_hex = hex_to_bytes(&extracted_hex).unwrap();
-        decoded_hex
     }
 }
 

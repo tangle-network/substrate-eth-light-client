@@ -253,7 +253,7 @@ fn write_file() -> std::result::Result<(), std::io::Error> {
 
 // Wish to avoid this code and use web3+rlp libraries directly
 fn rlp_append<TX>(header: &Block<TX>, stream: &mut RlpStream) {
-    stream.begin_list(15);
+    stream.begin_list(16);
     stream.append(&header.parent_hash);
     stream.append(&header.uncles_hash);
     stream.append(&header.author);
@@ -269,6 +269,7 @@ fn rlp_append<TX>(header: &Block<TX>, stream: &mut RlpStream) {
     stream.append(&header.extra_data.0);
     stream.append(&header.mix_hash.unwrap());
     stream.append(&header.nonce.unwrap());
+    stream.append(&header.hash.unwrap());
 }
 
 lazy_static! {
@@ -299,7 +300,7 @@ fn get_blocks(
         let mut stream = RlpStream::new();
         rlp_append(&block_header.clone().unwrap(), &mut stream);
         blocks.push(stream.out());
-        hashes.push(H256(block_header.clone().unwrap().hash.unwrap().0.into()));
+        hashes.push(H256(block_header.clone().unwrap().hash.unwrap().0));
     }
 
     (blocks, hashes)
@@ -314,22 +315,6 @@ fn read_block_raw(filename: String) -> BlockWithProofsRaw {
         std::fs::File::open(std::path::Path::new(&filename)).unwrap(),
     )
     .unwrap()
-}
-
-#[test]
-fn should_make_infura_call_and_parse_result() {
-    let (offchain, state) = testing::TestOffchainExt::new();
-    let mut t = sp_io::TestExternalities::default();
-    t.register_extension(OffchainExt::new(offchain));
-
-    set_infura_block_response(&mut state.write());
-
-    t.execute_with(|| {
-        // when
-        let number = Example::fetch_block_header().unwrap().number;
-        // then
-        assert_eq!(number.as_u64(), 11193406);
-    });
 }
 
 fn set_block_response(state: &mut testing::OffchainState) {
@@ -420,7 +405,7 @@ fn should_init() {
             Origin::signed(pair.public()),
             0,
             read_roots_collection().dag_merkle_roots,
-            blocks[0].clone(),
+            rlp::decode(&blocks[0]).unwrap(),
             U256::from(30),
             U256::from(10),
             U256::from(10),
@@ -459,7 +444,7 @@ fn add_blocks_2_and_3() {
             Origin::signed(pair.public()),
             0,
             read_roots_collection().dag_merkle_roots,
-            blocks[0].clone(),
+            rlp::decode(&blocks[0]).unwrap(),
             U256::from(30),
             U256::from(10),
             U256::from(10),
@@ -473,7 +458,7 @@ fn add_blocks_2_and_3() {
         {
             assert_ok!(Example::add_block_header(
                 Origin::signed(pair.public()),
-                block,
+                rlp::decode(&block).unwrap(),
                 _proof.to_double_node_with_merkle_proof_vec(),
             ));
         }
@@ -507,7 +492,7 @@ fn add_400000_block_only() {
             Origin::signed(pair.public()),
             400_000 / 30000,
             vec![block_with_proof.merkle_root],
-            blocks[0].clone(),
+            rlp::decode(&blocks[0]).unwrap(),
             U256::from(30),
             U256::from(10),
             U256::from(10),
@@ -540,13 +525,12 @@ fn add_two_blocks_from_8996776() {
             Origin::signed(pair.public()),
             0,
             read_roots_collection().dag_merkle_roots,
-            blocks[0].clone(),
+            rlp::decode(&blocks[0]).unwrap(),
             U256::from(30),
             U256::from(10),
             U256::from(10),
             None,
         ));
-
 
         for (block, _proof) in blocks
             .into_iter()
@@ -555,7 +539,7 @@ fn add_two_blocks_from_8996776() {
         {
             assert_ok!(Example::add_block_header(
                 Origin::signed(pair.public()),
-                block,
+                rlp::decode(&block).unwrap(),
                 _proof.to_double_node_with_merkle_proof_vec(),
             ));
         }
@@ -595,7 +579,7 @@ fn add_2_blocks_from_400000() {
             Origin::signed(pair.public()),
             400_000 / 30000,
             vec![blocks_with_proofs.first().unwrap().merkle_root],
-            blocks[0].clone(),
+            rlp::decode(&blocks[0]).unwrap(),
             U256::from(30),
             U256::from(10),
             U256::from(10),
@@ -611,7 +595,7 @@ fn add_2_blocks_from_400000() {
         {
             assert_ok!(Example::add_block_header(
                 Origin::signed(pair.public()),
-                block,
+                rlp::decode(&block).unwrap(),
                 _proof.to_double_node_with_merkle_proof_vec(),
             ));
         }
@@ -656,7 +640,7 @@ fn add_block_2_rust_ethash() {
             Origin::signed(pair.public()),
             0,
             read_roots_collection().dag_merkle_roots,
-            blocks[0].clone(),
+            rlp::decode(&blocks[0]).unwrap(),
             U256::from(30),
             U256::from(10),
             U256::from(10),
@@ -672,7 +656,7 @@ fn add_block_2_rust_ethash() {
         {
             assert_ok!(Example::add_block_header(
                 Origin::signed(pair.public()),
-                block,
+                rlp::decode(&block).unwrap(),
                 _proof.to_double_node_with_merkle_proof_vec(),
             ));
         }
