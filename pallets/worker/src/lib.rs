@@ -23,15 +23,13 @@ use sp_runtime::{
 };
 use sp_std::prelude::*;
 
-use ethash::{EthereumPatch, LightDAG};
 use ethereum_types::{H128, H256, H512, H64, U256};
-use lite_json::json::JsonValue;
 use sp_io::hashing::{keccak_256, sha2_256};
 
 mod constants;
 
 mod types;
-use types::*;
+use types::BlockHeader;
 
 mod prover;
 
@@ -42,8 +40,6 @@ use blocks_queue::{BlockQueue, Infura};
 mod tests;
 
 pub const UNSIGNED_TXS_PRIORITY: u64 = 100;
-
-pub type DAG = LightDAG<EthereumPatch>;
 
 /// Defines application identifier for crypto keys of this module.
 ///
@@ -114,15 +110,6 @@ pub struct RpcUrl {
     url: Vec<u8>,
 }
 
-/// Convert across boundary. `f(x) = 2 ^ 256 / x`.
-pub fn cross_boundary(val: U256) -> U256 {
-    if val <= U256::one() {
-        U256::max_value()
-    } else {
-        ((U256::one() << 255) / val) << 1
-    }
-}
-
 decl_error! {
     pub enum Error for Module<T: Config> {
         // Error returned when not sure which ocw function to executed
@@ -173,7 +160,7 @@ decl_storage! {
         /// header number -> hashes of all headers with this number.
         pub AllHeaderHashes get(fn all_header_hashes): map hasher(twox_64_concat) U256 => Vec<H256>;
         /// Known headers. Stores up to `finalized_gc_threshold`.
-        pub Headers get(fn headers): map hasher(twox_64_concat) H256 => Option<types::BlockHeader>;
+        pub Headers get(fn headers): map hasher(twox_64_concat) H256 => Option<BlockHeader>;
         /// Minimal information about the headers, like cumulative difficulty. Stores up to
         /// `finalized_gc_threshold`.
         pub Infos get(fn infos): map hasher(twox_64_concat) H256 => Option<HeaderInfo>;
@@ -229,7 +216,7 @@ decl_module! {
             <NumConfirmations>::set(Some(num_confirmations));
             <TrustedSigner<T>>::set(trusted_signer);
 
-            let header_hash = first_header.hash;
+            let header_hash = first_header.hash();
             let header_number = first_header.number;
 
             <BestHeaderHash>::set(header_hash);
@@ -253,10 +240,10 @@ decl_module! {
         pub fn add_block_header(
             origin,
             block_header: BlockHeader,
-            dag_nodes: Vec<DoubleNodeWithMerkleProof>,
+            dag_nodes: Vec<types::DoubleNodeWithMerkleProof>,
         ) {
             let _signer = ensure_signed(origin)?;
-            let header: types::BlockHeader = block_header;
+            let header = block_header;
             if let Some(trusted_signer) = Self::trusted_signer() {
                 ensure!(
                     _signer == trusted_signer,
@@ -288,7 +275,7 @@ decl_module! {
             };
 
             if let Some(best_info) = Self::infos(Self::best_header_hash()) {
-                let header_hash = header.hash;
+                let header_hash = header.hash();
                 let header_number = header.number;
                 if header_number + finalized_gc_threshold < best_info.number {
                     panic!("Header is too old to have a chance to appear on the canonical chain.");
@@ -446,10 +433,10 @@ decl_module! {
 
 fn generate_proofs(
     header: &BlockHeader,
-) -> Option<Vec<DoubleNodeWithMerkleProof>> {
+) -> Option<Vec<types::DoubleNodeWithMerkleProof>> {
     let rlp_header = rlp::encode(header);
     let rlp_hex = hex::encode(rlp_header);
-    let payload = ProofsPayload { rlp: rlp_hex };
+    let payload = types::ProofsPayload { rlp: rlp_hex };
     let body = serde_json::to_vec(&payload);
     let request = match http::Request::post(
         "http://127.0.0.1:3000/proofs",
@@ -476,8 +463,8 @@ fn generate_proofs(
         return None;
     }
     let body: Vec<u8> = response.body().collect();
-    let raw: BlockWithProofsRaw = serde_json::from_slice(&body).unwrap();
-    let output = BlockWithProofs::from(raw);
+    let raw: types::BlockWithProofsRaw = serde_json::from_slice(&body).unwrap();
+    let output = types::BlockWithProofs::from(raw);
     Some(output.to_double_node_with_merkle_proof_vec())
 }
 
@@ -620,76 +607,77 @@ impl<T: Config> Module<T> {
 
     /// Verify PoW of the header.
     fn verify_header(
-        header: types::BlockHeader,
-        prev: types::BlockHeader,
-        dag_nodes: Vec<DoubleNodeWithMerkleProof>,
+        header: BlockHeader,
+        prev: BlockHeader,
+        dag_nodes: Vec<types::DoubleNodeWithMerkleProof>,
     ) -> bool {
-        debug::native::info!("Starting hashimoto merkle...");
-        let (_mix_hash, result) = Self::hashimoto_merkle(
-            ethash::seal_header(&types::BlockHeaderSeal::from(header.clone())),
+        debug::native::debug!("Starting hashimoto merkle...");
+        let (mix_hash, result) = Self::hashimoto_merkle(
+            header.seal_hash(),
             header.nonce,
             header.number,
             &dag_nodes,
         );
-        debug::native::info!("Finished hashimoto merkle...");
+        debug::native::debug!("Finished hashimoto merkle...");
         // See YellowPaper formula (50) in section 4.3.4
         // 1. Simplified difficulty check to conform adjusting difficulty bomb
         // 2. Added condition: header.parent_hash() == prev.hash()
         //
-        
 
-        debug::native::info!(
-            "{:?} -------------- U256::from(&result.0) < cross_boundary(header.difficulty)",
-            U256::from(&result.0) < cross_boundary(header.difficulty));
-        debug::native::info!(
-            "{:?} -------------- U256::from(&result.0)",
-            U256::from(&result.0));
-        debug::native::info!(
-            "{:?} -------------- U256::from_big_endian(&result.0)",
-            U256::from_big_endian(&result.0));
-        debug::native::info!(
-            "{:?} -------------- U256::from_little_endian(&result.0)",
-            U256::from_little_endian(&result.0));
-        debug::native::info!(
-            "{:?} -------------- cross_boundary(header.difficulty)",
-            cross_boundary(header.difficulty));
-        debug::native::info!(
+        debug::native::trace!(
             "{:?} -------------- header.difficulty",
-            header.difficulty);
+            header.difficulty
+        );
+        let validate_ethash = Self::validate_ethash();
+        debug::native::trace!(
+            "{:?} -------------- Self::validate_ethash()",
+            validate_ethash
+        );
 
-        debug::native::info!(
+        debug::native::trace!(
             "{:?} -------------- (!Self::validate_ethash() || (header.difficulty < header.difficulty * 101 / 100 && header.difficulty > header.difficulty * 99 / 100))",
-            (!Self::validate_ethash() || (header.difficulty < header.difficulty * 101 / 100 && header.difficulty > header.difficulty * 99 / 100)));
-        debug::native::info!(
+            (!validate_ethash || (header.difficulty < header.difficulty * 101 / 100 && header.difficulty > header.difficulty * 99 / 100)));
+        debug::native::trace!(
             "{:?} -------------- header.gas_used <= header.gas_limit",
-            header.gas_used <= header.gas_limit);
-        debug::native::info!(
+            header.gas_used <= header.gas_limit
+        );
+        debug::native::trace!(
             "{:?} -------------- header.gas_limit < prev.gas_limit * 1025 / 1024",
             header.gas_limit < prev.gas_limit * 1025 / 1024);
-        debug::native::info!(
+        debug::native::trace!(
             "{:?} -------------- header.gas_limit > prev.gas_limit * 1023 / 1024",
             header.gas_limit > prev.gas_limit * 1023 / 1024);
-        debug::native::info!(
-            "{:?} -------------- header.gas_limit >= 5000u64",
-            header.gas_limit >= 5000u64);
-        debug::native::info!(
+        debug::native::trace!(
+            "{:?} -------------- header.gas_limit >= 5000",
+            header.gas_limit >= 5000u64
+        );
+        debug::native::trace!(
             "{:?} -------------- header.timestamp > prev.timestamp",
-            header.timestamp > prev.timestamp);
-        debug::native::info!(
+            header.timestamp > prev.timestamp
+        );
+        debug::native::trace!(
             "{:?} -------------- header.number == prev.number + 1",
-            header.number == prev.number + 1);
-        debug::native::info!(
+            header.number == prev.number + 1
+        );
+        debug::native::trace!(
             "{:?} -------------- header.parent_hash == prev.hash",
-            header.parent_hash == prev.hash);
-        debug::native::info!(
-            "{:?} -------------- header.extra_data.len() <= 32",
-            header.extra_data.len() <= 32);
-        debug::native::info!(
-            "Extra data len: {:?}",
-            header.extra_data.len());
+            header.parent_hash == prev.hash()
+        );
+        debug::native::trace!("Extra data len: {:?}", header.extra_data.len());
+        let boundary = ethash::cross_boundary(header.difficulty);
+        debug::native::trace!(
+            "{:?} -------------- U256::from(result.as_bytes()) < boundary",
+            U256::from_big_endian(result.as_bytes()) < boundary
+        );
+        debug::native::trace!(
+            "{:?} -------------- U256::from_big_endian(result.as_bytes())",
+            U256::from(result.as_bytes())
+        );
+        debug::native::trace!("{:?} -------------- boundary", boundary);
 
-        U256::from_little_endian(&result.0) < cross_boundary(header.difficulty)
-            && (!Self::validate_ethash()
+        assert_eq!(mix_hash, header.mix_hash, "mix_hash mismatch");
+        U256::from(result.as_bytes()) < boundary
+            && (!validate_ethash
                 || (header.difficulty < header.difficulty * 101 / 100
                     && header.difficulty > header.difficulty * 99 / 100))
             && header.gas_used <= header.gas_limit
@@ -698,7 +686,7 @@ impl<T: Config> Module<T> {
             && header.gas_limit >= 5000u64
             && header.timestamp > prev.timestamp
             && header.number == prev.number + 1
-            && header.parent_hash == prev.hash
+            && header.parent_hash == prev.hash()
     }
 
     /// Verify merkle paths to the DAG nodes.
@@ -706,7 +694,7 @@ impl<T: Config> Module<T> {
         header_hash: H256,
         nonce: H64,
         header_number: U256,
-        nodes: &[DoubleNodeWithMerkleProof],
+        nodes: &[types::DoubleNodeWithMerkleProof],
     ) -> (H256, H256) {
         <VerificationIndex>::set(0);
         // Check that we have the expected number of nodes with proofs
@@ -715,17 +703,20 @@ impl<T: Config> Module<T> {
         //     return Err(Error::UnexpectedNumberOfNodes);
         // }
 
-        let epoch = header_number.as_u64() / EPOCH_LENGTH;
+        let epoch = header_number.as_u64() / 30_000;
         // Reuse single Merkle root across all the proofs
         let merkle_root = Self::dag_merkle_root(epoch);
-        let pair = ethash::hashimoto_with_hasher(
+        ethash::hashimoto(
             header_hash.0.into(),
             nonce.0.into(),
             ethash::get_full_size(epoch as usize),
             |offset| {
                 let idx = Self::verification_index() as usize;
                 <VerificationIndex>::set(Self::verification_index() + 1);
-                debug::native::info!("Starting verification index: {:?}...", idx);
+                debug::native::trace!(
+                    "Starting verification index: {:?}...",
+                    idx
+                );
                 // Each two nodes are packed into single 128 bytes with Merkle
                 // proof
                 let node = &nodes[idx as usize / 2];
@@ -745,11 +736,7 @@ impl<T: Config> Module<T> {
                 data[32..].reverse();
                 data.into()
             },
-            keccak_256,
-            types::keccak_512,
-        );
-
-        (H256(pair.0.into()), H256(pair.1.into()))
+        )
     }
 }
 

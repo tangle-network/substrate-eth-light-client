@@ -6,7 +6,6 @@ extern crate alloc;
 use alloc::format;
 
 use codec::{Decode, Encode};
-use ethereum_types::U256;
 use frame_support::debug;
 use sp_runtime::offchain::http;
 use sp_std::collections::vec_deque::VecDeque;
@@ -174,7 +173,7 @@ impl Infura {
             return Err(http::Error::IoError);
         }
         let block: InfuraBlockHeader = serde_json::from_value(result).unwrap();
-        Ok(BlockHeader::from(block))
+        Ok(block.into())
     }
 }
 
@@ -212,21 +211,43 @@ impl BlockFetcher for Infura {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ethereum_types::*;
+
     #[derive(Debug, Clone, Encode, Decode)]
     struct MockedInfura(u64);
+
+    fn mock_header_with(number: u64) -> BlockHeader {
+        BlockHeader {
+            parent_hash: H256::random(),
+            uncles_hash: H256::random(),
+            author: Address::random(),
+            state_root: H256::random(),
+            transactions_root: H256::random(),
+            receipts_root: H256::random(),
+            log_bloom: Bloom::random(),
+            difficulty: U256::MAX,
+            number: U256::from(number),
+            gas_limit: 1000,
+            gas_used: 1000,
+            timestamp: 1610749011,
+            extra_data: b"Mocked data for tests".to_vec(),
+            mix_hash: H256::random(),
+            nonce: H64::random(),
+        }
+    }
 
     impl BlockFetcher for MockedInfura {
         type Error = http::Error;
 
         fn fetch_latest(&self) -> Result<BlockHeader, Self::Error> {
-            Ok(BlockHeader::mock_with(self.0))
+            Ok(mock_header_with(self.0))
         }
 
         fn fetch_one(
             &self,
             block_number: u64,
         ) -> Result<BlockHeader, Self::Error> {
-            Ok(BlockHeader::mock_with(block_number))
+            Ok(mock_header_with(block_number))
         }
 
         fn fetch_many(
@@ -235,10 +256,7 @@ mod tests {
         ) -> Result<Vec<BlockHeader>, Self::Error> {
             let from = *block_numbers.start();
             let to = cmp::min(self.0, *block_numbers.end());
-            Ok((from..=to)
-                .into_iter()
-                .map(BlockHeader::mock_with)
-                .collect())
+            Ok((from..=to).into_iter().map(mock_header_with).collect())
         }
     }
 

@@ -10,9 +10,8 @@ print(f'pub const DAG_START_EPOCH: u64 = {first_epoch};')
 print("lazy_static::lazy_static! {")
 print("    pub static ref ROOT_HASHES: Vec<H128> = vec![")
 for line in lines:
-    parts = line.split(':')
-    h = parts[1]
-    print(f'        "{h}",')
+    [epoch, root] = line.split(':')
+    print(f'        "{root}", // {epoch}')
 print("    ]")
 print("    .into_iter()")
 print("    .map(|v| &v[2..])")
