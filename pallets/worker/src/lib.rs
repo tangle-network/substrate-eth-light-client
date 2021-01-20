@@ -1,5 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
-#![allow(clippy::too_many_arguments)]
+#![allow(clippy::too_many_arguments, clippy::large_enum_variant)]
 
 use codec::{Decode, Encode};
 use frame_support::{
@@ -14,7 +14,6 @@ use frame_system::{
 };
 use sp_core::crypto::KeyTypeId;
 use sp_runtime::offchain::storage::StorageValueRef;
-use sp_runtime::offchain::storage_lock::{StorageLock, Time};
 use sp_runtime::{
     offchain::http,
     transaction_validity::{
@@ -24,27 +23,23 @@ use sp_runtime::{
 };
 use sp_std::prelude::*;
 
-use ethash::{EthereumPatch, LightDAG};
-use ethereum_types::{Bloom, H128, H160, H256, H512, H64, U256};
-use lite_json::json::JsonValue;
-use rlp::RlpStream;
+use ethereum_types::{H128, H256, H512, H64, U256};
 use sp_io::hashing::{keccak_256, sha2_256};
 
 mod constants;
 
 mod types;
-use types::*;
-
-pub mod roots;
-pub use roots::roots;
+use types::BlockHeader;
 
 mod prover;
+
+mod blocks_queue;
+use blocks_queue::{BlockQueue, Infura};
+
 #[cfg(test)]
 mod tests;
 
 pub const UNSIGNED_TXS_PRIORITY: u64 = 100;
-
-pub type DAG = LightDAG<EthereumPatch>;
 
 /// Defines application identifier for crypto keys of this module.
 ///
@@ -115,15 +110,6 @@ pub struct RpcUrl {
     url: Vec<u8>,
 }
 
-/// Convert across boundary. `f(x) = 2 ^ 256 / x`.
-pub fn cross_boundary(val: U256) -> U256 {
-    if val <= U256::one() {
-        U256::max_value()
-    } else {
-        ((U256::one() << 255) / val) << 1
-    }
-}
-
 decl_error! {
     pub enum Error for Module<T: Config> {
         // Error returned when not sure which ocw function to executed
@@ -174,7 +160,7 @@ decl_storage! {
         /// header number -> hashes of all headers with this number.
         pub AllHeaderHashes get(fn all_header_hashes): map hasher(twox_64_concat) U256 => Vec<H256>;
         /// Known headers. Stores up to `finalized_gc_threshold`.
-        pub Headers get(fn headers): map hasher(twox_64_concat) H256 => Option<types::BlockHeader>;
+        pub Headers get(fn headers): map hasher(twox_64_concat) H256 => Option<BlockHeader>;
         /// Minimal information about the headers, like cumulative difficulty. Stores up to
         /// `finalized_gc_threshold`.
         pub Infos get(fn infos): map hasher(twox_64_concat) H256 => Option<HeaderInfo>;
@@ -210,12 +196,13 @@ decl_module! {
             origin,
             dags_start_epoch: u64,
             dags_merkle_roots: Vec<H128>,
-            first_header: Vec<u8>,
+            first_header: BlockHeader,
             hashes_gc_threshold: U256,
             finalized_gc_threshold: U256,
             num_confirmations: U256,
             trusted_signer: Option<T::AccountId>,
         ) {
+            debug::native::info!("Initializing the module ..");
             let _signer = ensure_signed(origin)?;
             ensure!(Self::dags_start_epoch().is_none(), "Already initialized");
             ensure!(Self::hashes_gc_threshold().is_none(), "Already initialized");
@@ -229,19 +216,21 @@ decl_module! {
             <NumConfirmations>::set(Some(num_confirmations));
             <TrustedSigner<T>>::set(trusted_signer);
 
-            let header: types::BlockHeader = rlp::decode(first_header.as_slice()).unwrap();
-            let header_hash = header.hash.unwrap();
-            let header_number = U256::from(header.number);
+            let header_hash = first_header.hash();
+            let header_number = first_header.number;
 
             <BestHeaderHash>::set(header_hash);
             <AllHeaderHashes>::insert(header_number, vec![header_hash]);
             <CanonicalHeaderHashes>::insert(header_number, header_hash);
-            <Headers>::insert(header_hash, header.clone());
+            <Headers>::insert(header_hash, first_header.clone());
+            debug::native::debug!("Added: {:#?}", first_header);
             <Infos>::insert(header_hash, HeaderInfo {
-                total_difficulty: header.difficulty,
-                parent_hash: header.parent_hash,
-                number: U256::from(header.number),
+                total_difficulty: first_header.difficulty,
+                parent_hash: first_header.parent_hash,
+                number: first_header.number,
             });
+            debug::native::info!("module init with header block #{}", first_header.number);
+            debug::native::info!("module is ready ..");
         }
 
         /// Add the block header to the client.
@@ -250,23 +239,29 @@ decl_module! {
         #[weight = 0]
         pub fn add_block_header(
             origin,
-            block_header: Vec<u8>,
-            dag_nodes: Vec<DoubleNodeWithMerkleProof>,
+            block_header: BlockHeader,
+            dag_nodes: Vec<types::DoubleNodeWithMerkleProof>,
         ) {
             let _signer = ensure_signed(origin)?;
-            let header: types::BlockHeader = rlp::decode(block_header.as_slice()).unwrap();
+            let header = block_header;
             if let Some(trusted_signer) = Self::trusted_signer() {
                 ensure!(
                     _signer == trusted_signer,
                     "Eth-client is deployed as trust mode, only trusted_signer can add a new header"
                 );
             } else {
-                let prev = Self::headers(header.parent_hash)
-                    .expect("Parent header should be present to add a new header");
-                ensure!(
-                    Self::verify_header(header.clone(), prev, dag_nodes),
-                    "The header is not valid"
-                );
+                debug::native::debug!("trying to find header #{} parent", header.number);
+                if let Some(prev) = Self::headers(header.parent_hash) {
+                    debug::native::debug!("found parent header: {:?}", prev);
+                    debug::native::debug!("starting verification...");
+                    let verified = Self::verify_header(header.clone(), prev, dag_nodes);
+                    debug::native::debug!("Is header verified? {:?}", verified);
+                    ensure!(verified, "The header is not valid");
+                    debug::native::debug!("header #{} verified!", header.number);
+                } else {
+                    debug::native::warn!("{:#?}", header);
+                    panic!("parent_hash not found for header #{}", header.number);
+                }
             }
 
             let finalized_gc_threshold = match Self::finalized_gc_threshold() {
@@ -280,8 +275,8 @@ decl_module! {
             };
 
             if let Some(best_info) = Self::infos(Self::best_header_hash()) {
-                let header_hash = header.hash.unwrap();
-                let header_number = U256::from(header.number);
+                let header_hash = header.hash();
+                let header_number = header.number;
                 if header_number + finalized_gc_threshold < best_info.number {
                     panic!("Header is too old to have a chance to appear on the canonical chain.");
                 }
@@ -297,6 +292,7 @@ decl_module! {
 
                     // Record full information about this header.
                     <Headers>::insert(header_hash, header.clone());
+                    debug::native::debug!("Header #{} added", header.number);
                     let info = HeaderInfo {
                         total_difficulty: parent_info.total_difficulty + header.difficulty,
                         parent_hash: header.parent_hash,
@@ -328,7 +324,7 @@ decl_module! {
 
                         // Replacing past hashes until we converge into the same parent.
                         // Starting from the parent hash.
-                        let mut number = U256::from(header.number) - 1;
+                        let mut number = header.number - 1;
                         let mut current_hash = info.parent_hash;
                         loop {
                             if let Some(prev_value) = Self::canonical_header_hashes(number) {
@@ -372,132 +368,42 @@ decl_module! {
             let parent_hash = <system::Module<T>>::block_hash(block_number - 1u32.into());
             debug::native::info!("Current block: {:?} (parent hash: {:?})", block_number, parent_hash);
 
-            let header: types::BlockHeader = Self::fetch_block_header().unwrap();
-
-            let epoch = (header.number as usize / 30000) as u64;
-            let epoch_info = StorageValueRef::persistent(constants::storage_keys::STORED_EPOCH);
-            let stored_epoch = match epoch_info.get::<u64>() {
-                Some(e) => e.unwrap(),
-                None => epoch,
+            let header_queue_info = StorageValueRef::persistent(
+                constants::storage_keys::BLOCKS_QUEUE,
+            );
+            let mut header_queue = match header_queue_info.get::<BlockQueue<Infura>>() {
+                Some(queue) => queue.unwrap(),
+                None => BlockQueue::with_fetcher(Infura),
             };
 
-            let cache_info = StorageValueRef::persistent(constants::storage_keys::DAG_CACHE);
-            // fetch cache or generate if it doesn't exist
-            let mut cache = match cache_info.get::<Vec<u8>>() {
-                Some(c) => c.unwrap(),
-                None => {
-                    debug::native::info!("Starting cache generation!");
-                    let l_dag = DAG::new(header.number.into());
-                    debug::native::info!("Finished cache generation!");
-                    cache_info.set(&l_dag.cache);
-                    l_dag.cache
+            let header = match header_queue.fetch_next_block() {
+                Ok(block) => block,
+                Err(err) => {
+                    debug::native::error!("Block queue error: {:?}", err);
+                    return;
                 }
             };
-
-            let use_left_info = StorageValueRef::persistent(constants::storage_keys::USE_LEFT_DAG_DATASET);
-            let use_left = match use_left_info.get::<bool>() {
-                Some(value) => value.unwrap(),
-                None => {
-                    // okay, here we need to be a bit cliver, if this value is not exist yet, we will
-                    // assume that we are a clean state, which means that there is no dataset too.
-                    // so we will set this to `true` and return, next we will try to load the
-                    // dataset and it will not be exist yet, so we will generate it.
-                    use_left_info.set(&true);
-                    true
-                }
-            };
-
-            // when the epoch changes, we need to regenerate the cache and swap the dataset.
-            // otherwise we repopulate the light DAG with existing cache.
-            if epoch > stored_epoch {
-                debug::native::info!("Restarting cache generation due to epoch change!");
-                epoch_info.set(&epoch);
-                // regeneate cache and store the dag
-                let l_dag = DAG::new(header.number.into());
-                cache = l_dag.cache;
-                // switch the datasets.
-                use_left_info.set(&!use_left);
-            }
-
-            let mut stream = RlpStream::new();
-            Self::rlp_append(header.clone(), &mut stream);
-            let rlp_header: Vec<u8> = stream.out();
 
             let signer = Signer::<T, T::AuthorityId>::any_account();
 
-            let dataset_info = if use_left {
-                StorageValueRef::persistent(constants::storage_keys::LEFT_DAG_DATASET)
-            } else {
-                StorageValueRef::persistent(constants::storage_keys::RIGHT_DAG_DATASET)
-            };
-
-            let dataset = match dataset_info.get::<Vec<u8>>() {
-                Some(dataset) => Some(dataset.unwrap()),
-                None => {
-                    debug::native::info!("Generate dataset for stored epoch: {}", stored_epoch);
-                    // lock the storage.
-                    let mut lock = StorageLock::<Time>::new(constants::storage_keys::DAG_DATASET_LOCK);
-                    let maybe_dataset = if let Ok(_guard) = lock.try_lock() {
-                        let dataset = generate_dataset(stored_epoch, cache.as_slice(), &dataset_info);
-                        Some(dataset)
-                    } else {
-                        // no work to be done here, until the dataset generation is complete.
-                        None
-                    };
-                    maybe_dataset
-                },
-            };
-
-            let dataset = match dataset {
-                Some(dataset) => dataset,
-                // this skips the current invocation, as there is another worker is generating the
-                // dataset.
-                None => return
-            };
-
-            let should_generate_dataset = should_generate_dataset(U256::from(header.number), stored_epoch);
-            debug::native::info!("Should we generate the dataset? {}", should_generate_dataset);
-            if should_generate_dataset {
-                // at this point we are sure that we have some dataset stored in either left or
-                // right.
-                // we will will generate the next epoch dataset and store it in the other end of
-                // the dataset, also we will lock here to avoid double generation.
-
-                // this the same lock used before to generate the first dataset, but we are 100%
-                // sure that the we have a dataset, so there will be no locking there.
-                let mut lock = StorageLock::<Time>::new(constants::storage_keys::DAG_DATASET_LOCK);
-                if let Ok(_guard) = lock.try_lock() {
-                    // if we are using the left side, we should store the next DAG Dataset in the
-                    // right, and the other way around.
-                    let key = if use_left {
-                        StorageValueRef::persistent(constants::storage_keys::RIGHT_DAG_DATASET)
-                    } else {
-                        StorageValueRef::persistent(constants::storage_keys::LEFT_DAG_DATASET)
-                    };
-                    let next_epoch = stored_epoch + 1;
-                    // this will generate and store the dataset in the key.
-                    generate_dataset(next_epoch, cache.as_slice(), &key);
-                };
-            }
             let latest_block_number = Self::last_block_number();
-            let call = if U256::from(header.number) > latest_block_number {
+            let call = if header.number > latest_block_number {
                 if Self::initialized() {
-                    // TODO(drewstone): we should convert this proofs to DoubleNodeWithMerkleProof
-                    // but how?
-                    let _tree = ethash::calc_dataset_merkle_proofs(
-                        stored_epoch as usize,
-                        dataset.as_slice(),
-                    );
-                    let proof = [DoubleNodeWithMerkleProof::new()].to_vec();
-                    debug::native::info!("Adding header #: {:?}!", header.number);
-                    Some(Call::add_block_header(rlp_header, proof))
+                    if let Some(proofs) = generate_proofs(&header) {
+                        debug::native::info!("Adding header #: {:?}!", header.number);
+                        Some(Call::add_block_header(header, proofs))
+                    } else {
+                        // it sounds that we can't generate the proofs for that header now.
+                        // push it back to the front of the queue.
+                        header_queue.push_front(header);
+                        None
+                    }
                 } else {
                     debug::native::info!("Initializing with header #: {:?}!", header.number);
-                    let dags_start_epoch: u64 = header.number / 30000;
                     Some(Call::init(
-                        dags_start_epoch,
-                        vec![],
-                        rlp_header,
+                        constants::DAG_START_EPOCH,
+                        constants::ROOT_HASHES.clone(),
+                        header,
                         U256::from(30),
                         U256::from(10),
                         U256::from(10),
@@ -508,7 +414,7 @@ decl_module! {
                 debug::native::info!("Skipping adding #: {:?}, already added!", header.number);
                 None
             };
-
+            header_queue_info.set(&header_queue);
             if let Some(c) = call {
                 let result = signer.send_signed_transaction(|_acct| c.clone());
                 // Display error if the signed tx fails.
@@ -517,34 +423,49 @@ decl_module! {
                         debug::error!("failure: offchain_signed_tx: tx sent: {:?}", acc.id);
                     }
                     // Transaction is sent successfully
+                } else {
+                    debug::native::info!("transaction sent but no result");
                 }
             }
         }
     }
 }
 
-fn generate_dataset(
-    epoch: u64,
-    cache: &[u8],
-    key: &StorageValueRef,
-) -> Vec<u8> {
-    let dataset_size = ethash::get_full_size(epoch as usize);
-    let mut dataset = vec![0u8; dataset_size];
-    ethash::make_dataset(&mut dataset, &cache);
-    key.set(&dataset);
-    dataset
-}
-
-fn should_generate_dataset(block_number: U256, stored_epoch: u64) -> bool {
-    const ETH_PATCH_SIZE: u64 = 30_000;
-    const REGENERATION_THRESHOLD: u64 = ETH_PATCH_SIZE / 2;
-
-    let current_block_number = block_number.as_u64();
-    let last_block_number = (stored_epoch + 1) * ETH_PATCH_SIZE;
-    let diff = last_block_number
-        .checked_sub(current_block_number)
-        .unwrap_or(REGENERATION_THRESHOLD);
-    diff <= REGENERATION_THRESHOLD
+fn generate_proofs(
+    header: &BlockHeader,
+) -> Option<Vec<types::DoubleNodeWithMerkleProof>> {
+    let rlp_header = rlp::encode(header);
+    let rlp_hex = hex::encode(rlp_header);
+    let payload = types::ProofsPayload { rlp: rlp_hex };
+    let body = serde_json::to_vec(&payload);
+    let request = match http::Request::post(
+        "http://127.0.0.1:3000/proofs",
+        body,
+    )
+    .send()
+    {
+        Ok(handle) => handle,
+        Err(e) => {
+            debug::native::error!("http request failed: {:?}", e);
+            return None;
+        },
+    };
+    let response = match request.wait() {
+        Ok(res) => res,
+        Err(e) => {
+            debug::native::error!("http error: {:?}", e);
+            return None;
+        },
+    };
+    let status_code = response.code;
+    if status_code != 200 {
+        // server is not ready yet!
+        return None;
+    }
+    let body: Vec<u8> = response.body().collect();
+    let raw: types::BlockWithProofsRaw = serde_json::from_slice(&body).unwrap();
+    let output = types::BlockWithProofs::from(raw);
+    Some(output.to_double_node_with_merkle_proof_vec())
 }
 
 fn hex_to_bytes(v: &Vec<char>) -> Result<Vec<u8>, hex::FromHexError> {
@@ -652,7 +573,7 @@ impl<T: Config> Module<T> {
     fn truncate_to_h128(arr: H256) -> H128 {
         let mut data = [0u8; 16];
         data.copy_from_slice(&(arr.0)[16..]);
-        H128(data.into())
+        H128(data)
     }
 
     fn hash_h128(l: H128, r: H128) -> H128 {
@@ -686,37 +607,86 @@ impl<T: Config> Module<T> {
 
     /// Verify PoW of the header.
     fn verify_header(
-        header: types::BlockHeader,
-        prev: types::BlockHeader,
-        dag_nodes: Vec<DoubleNodeWithMerkleProof>,
+        header: BlockHeader,
+        prev: BlockHeader,
+        dag_nodes: Vec<types::DoubleNodeWithMerkleProof>,
     ) -> bool {
-        let (_mix_hash, result) = Self::hashimoto_merkle(
-            header.partial_hash.unwrap(),
+        debug::native::debug!("Starting hashimoto merkle...");
+        let (mix_hash, result) = Self::hashimoto_merkle(
+            header.seal_hash(),
             header.nonce,
-            U256::from(header.number),
+            header.number,
             &dag_nodes,
         );
-
-        let five_thousand = match U256::from_dec_str("5000") {
-            Ok(r) => r,
-            Err(_) => panic!("Invalid decimal conversion"),
-        };
+        debug::native::debug!("Finished hashimoto merkle...");
         // See YellowPaper formula (50) in section 4.3.4
         // 1. Simplified difficulty check to conform adjusting difficulty bomb
         // 2. Added condition: header.parent_hash() == prev.hash()
         //
-        U256::from_big_endian(&result.0) < cross_boundary(header.difficulty)
-            && (!Self::validate_ethash()
+
+        debug::native::trace!(
+            "{:?} -------------- header.difficulty",
+            header.difficulty
+        );
+        let validate_ethash = Self::validate_ethash();
+        debug::native::trace!(
+            "{:?} -------------- Self::validate_ethash()",
+            validate_ethash
+        );
+
+        debug::native::trace!(
+            "{:?} -------------- (!Self::validate_ethash() || (header.difficulty < header.difficulty * 101 / 100 && header.difficulty > header.difficulty * 99 / 100))",
+            (!validate_ethash || (header.difficulty < header.difficulty * 101 / 100 && header.difficulty > header.difficulty * 99 / 100)));
+        debug::native::trace!(
+            "{:?} -------------- header.gas_used <= header.gas_limit",
+            header.gas_used <= header.gas_limit
+        );
+        debug::native::trace!(
+            "{:?} -------------- header.gas_limit < prev.gas_limit * 1025 / 1024",
+            header.gas_limit < prev.gas_limit * 1025 / 1024);
+        debug::native::trace!(
+            "{:?} -------------- header.gas_limit > prev.gas_limit * 1023 / 1024",
+            header.gas_limit > prev.gas_limit * 1023 / 1024);
+        debug::native::trace!(
+            "{:?} -------------- header.gas_limit >= 5000",
+            header.gas_limit >= 5000u64
+        );
+        debug::native::trace!(
+            "{:?} -------------- header.timestamp > prev.timestamp",
+            header.timestamp > prev.timestamp
+        );
+        debug::native::trace!(
+            "{:?} -------------- header.number == prev.number + 1",
+            header.number == prev.number + 1
+        );
+        debug::native::trace!(
+            "{:?} -------------- header.parent_hash == prev.hash",
+            header.parent_hash == prev.hash()
+        );
+        debug::native::trace!("Extra data len: {:?}", header.extra_data.len());
+        let boundary = ethash::cross_boundary(header.difficulty);
+        debug::native::trace!(
+            "{:?} -------------- U256::from(result.as_bytes()) < boundary",
+            U256::from_big_endian(result.as_bytes()) < boundary
+        );
+        debug::native::trace!(
+            "{:?} -------------- U256::from_big_endian(result.as_bytes())",
+            U256::from(result.as_bytes())
+        );
+        debug::native::trace!("{:?} -------------- boundary", boundary);
+
+        assert_eq!(mix_hash, header.mix_hash, "mix_hash mismatch");
+        U256::from(result.as_bytes()) < boundary
+            && (!validate_ethash
                 || (header.difficulty < header.difficulty * 101 / 100
                     && header.difficulty > header.difficulty * 99 / 100))
             && header.gas_used <= header.gas_limit
             && header.gas_limit < prev.gas_limit * 1025 / 1024
             && header.gas_limit > prev.gas_limit * 1023 / 1024
-            && header.gas_limit >= five_thousand
+            && header.gas_limit >= 5000u64
             && header.timestamp > prev.timestamp
             && header.number == prev.number + 1
-            && header.parent_hash == prev.hash.unwrap()
-            && header.extra_data.len() <= 32
+            && header.parent_hash == prev.hash()
     }
 
     /// Verify merkle paths to the DAG nodes.
@@ -724,7 +694,7 @@ impl<T: Config> Module<T> {
         header_hash: H256,
         nonce: H64,
         header_number: U256,
-        nodes: &[DoubleNodeWithMerkleProof],
+        nodes: &[types::DoubleNodeWithMerkleProof],
     ) -> (H256, H256) {
         <VerificationIndex>::set(0);
         // Check that we have the expected number of nodes with proofs
@@ -733,17 +703,20 @@ impl<T: Config> Module<T> {
         //     return Err(Error::UnexpectedNumberOfNodes);
         // }
 
-        let epoch = header_number.as_u64() / EPOCH_LENGTH;
+        let epoch = header_number.as_u64() / 30_000;
         // Reuse single Merkle root across all the proofs
         let merkle_root = Self::dag_merkle_root(epoch);
-        let pair = ethash::hashimoto_with_hasher(
+        ethash::hashimoto(
             header_hash.0.into(),
             nonce.0.into(),
             ethash::get_full_size(epoch as usize),
             |offset| {
                 let idx = Self::verification_index() as usize;
                 <VerificationIndex>::set(Self::verification_index() + 1);
-
+                debug::native::trace!(
+                    "Starting verification index: {:?}...",
+                    idx
+                );
                 // Each two nodes are packed into single 128 bytes with Merkle
                 // proof
                 let node = &nodes[idx as usize / 2];
@@ -763,288 +736,7 @@ impl<T: Config> Module<T> {
                 data[32..].reverse();
                 data.into()
             },
-            keccak_256,
-            types::keccak_512,
-        );
-
-        (H256(pair.0.into()), H256(pair.1.into()))
-    }
-
-    fn fetch_block_header() -> Result<types::BlockHeader, http::Error> {
-        // Make a post request to an eth chain
-        let body = br#"{"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest", false],"id":1}"#;
-        let request: http::Request = http::Request::post(
-            "https://mainnet.infura.io/v3/b5f870422ee5454fb11937e947154cd2",
-            [&body[..]].to_vec(),
-        );
-        let pending = request.send().unwrap();
-
-        // wait indefinitely for response (TODO: timeout)
-        let mut response = pending.wait().unwrap();
-        let headers = response.headers().into_iter();
-        assert_eq!(headers.current(), None);
-
-        // and collect the body
-        let body = response.body().collect::<Vec<u8>>();
-        let body_str = sp_std::str::from_utf8(&body)
-            .map_err(|_| {
-                debug::warn!("No UTF8 body");
-                http::Error::Unknown
-            })
-            .unwrap();
-        // decode JSON into object
-        let val: JsonValue = lite_json::parse_json(&body_str).unwrap();
-        let header: types::BlockHeader = Self::json_to_rlp(val);
-        Ok(header)
-    }
-
-    fn fetch_proof(rlp_header: Vec<u8>) -> Result<Vec<u8>, http::Error> {
-        // Make a post request to an eth chain
-        let request: http::Request<Vec<&[u8]>> = http::Request::post(
-            "http://localhost:8080/proof",
-            [&rlp_header[..]].to_vec(),
-        );
-        let pending = request.send().unwrap();
-
-        // wait indefinitely for response (TODO: timeout)
-        let mut response = pending.wait().unwrap();
-        let headers = response.headers().into_iter();
-        assert_eq!(headers.current(), None);
-
-        // and collect the body
-        let body = response.body().collect::<Vec<u8>>();
-        let body_str = sp_std::str::from_utf8(&body)
-            .map_err(|_| {
-                debug::warn!("No UTF8 body");
-                http::Error::Unknown
-            })
-            .unwrap();
-        // decode JSON into object
-        let _val: JsonValue = lite_json::parse_json(&body_str).unwrap();
-        Ok(vec![])
-    }
-
-    pub fn rlp_append(header: types::BlockHeader, stream: &mut RlpStream) {
-        stream.begin_list(15);
-        stream.append(&header.parent_hash);
-        stream.append(&header.uncles_hash);
-        stream.append(&header.author);
-        stream.append(&header.state_root);
-        stream.append(&header.transactions_root);
-        stream.append(&header.receipts_root);
-        stream.append(&header.log_bloom);
-        stream.append(&header.difficulty);
-        stream.append(&header.number);
-        stream.append(&header.gas_limit);
-        stream.append(&header.gas_used);
-        stream.append(&header.timestamp);
-        stream.append(&header.extra_data);
-        stream.append(&header.mix_hash);
-        stream.append(&header.nonce);
-    }
-
-    pub fn json_to_rlp(json: JsonValue) -> types::BlockHeader {
-        // get { "result": VAL }
-        let block: Option<Vec<(Vec<char>, JsonValue)>> = match json {
-            JsonValue::Object(obj) => obj
-                .into_iter()
-                .find(|(k, _)| {
-                    k.iter().map(|c| *c as u8).collect::<Vec<u8>>()
-                        == b"result".to_vec()
-                })
-                .and_then(|v| match v.1 {
-                    JsonValue::Object(block) => Some(block),
-                    _ => None,
-                }),
-            _ => None,
-        };
-
-        // debug::native::info!("Decoding difficulty!");
-        let decoded_difficulty_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"difficulty".to_vec(),
-        );
-        let difficulty = U256::from_big_endian(&decoded_difficulty_hex[..]);
-
-        // debug::native::info!("Decoding extra_data!");
-        let decoded_extra_data_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"extraData".to_vec(),
-        );
-
-        // debug::native::info!("Decoding gas_limit!");
-        let decoded_gas_limit_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"gasLimit".to_vec(),
-        );
-        let gas_limit = U256::from_big_endian(&decoded_gas_limit_hex[..]);
-
-        // debug::native::info!("Decoding gas_used!");
-        let decoded_gas_used_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"gasUsed".to_vec(),
-        );
-        let gas_used = U256::from_big_endian(&decoded_gas_used_hex[..]);
-
-        // debug::native::info!("Decoding hash!");
-        let decoded_hash_hex =
-            Self::extract_property_from_block(block.clone(), b"hash".to_vec());
-        let mut temp_hash = [0; 32];
-        for i in 0..decoded_hash_hex.len() {
-            temp_hash[i] = decoded_hash_hex[i];
-        }
-        let hash = H256::from(temp_hash);
-
-        // debug::native::info!("Decoding logs_bloom!");
-        let decoded_logs_bloom_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"logsBloom".to_vec(),
-        );
-        let mut temp_logs_bloom = [0; 256];
-        for i in 0..decoded_logs_bloom_hex.len() {
-            temp_logs_bloom[i] = decoded_logs_bloom_hex[i];
-        }
-        let logs_bloom = Bloom::from(temp_logs_bloom);
-
-        // debug::native::info!("Decoding miner!");
-        let decoded_miner_hex =
-            Self::extract_property_from_block(block.clone(), b"miner".to_vec());
-        let mut temp_miner = [0; 20];
-        for i in 0..decoded_miner_hex.len() {
-            temp_miner[i] = decoded_miner_hex[i];
-        }
-        let miner = H160::from(temp_miner);
-
-        // debug::native::info!("Decoding mix_hash!");
-        let decoded_mix_hash_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"mixHash".to_vec(),
-        );
-        let mut temp_mix_hash = [0; 32];
-        for i in 0..decoded_mix_hash_hex.len() {
-            temp_mix_hash[i] = decoded_mix_hash_hex[i];
-        }
-        let mix_hash = H256::from(temp_mix_hash);
-
-        // debug::native::info!("Decoding nonce!");
-        let decoded_nonce_hex =
-            Self::extract_property_from_block(block.clone(), b"nonce".to_vec());
-        let mut temp_nonce = [0; 8];
-        for i in 0..decoded_nonce_hex.len() {
-            temp_nonce[i] = decoded_nonce_hex[i];
-        }
-        let nonce = H64::from(temp_nonce);
-
-        // debug::native::info!("Decoding number!");
-        let decoded_number_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"number".to_vec(),
-        );
-        let number = U256::from_big_endian(&decoded_number_hex[..]).as_u64();
-
-        // debug::native::info!("Decoding parent_hash!");
-        let decoded_parent_hash_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"parentHash".to_vec(),
-        );
-        let mut temp_parent_hash = [0; 32];
-        for i in 0..decoded_parent_hash_hex.len() {
-            temp_parent_hash[i] = decoded_parent_hash_hex[i];
-        }
-        let parent_hash = H256::from(temp_parent_hash);
-
-        // debug::native::info!("Decoding receipts_root!");
-        let decoded_receipts_root_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"receiptsRoot".to_vec(),
-        );
-        let mut temp_receipts_root = [0; 32];
-        for i in 0..decoded_receipts_root_hex.len() {
-            temp_receipts_root[i] = decoded_receipts_root_hex[i];
-        }
-        let receipts_root = H256::from(temp_receipts_root);
-
-        // debug::native::info!("Decoding sha3_uncles!");
-        let decoded_sha3_uncles_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"sha3Uncles".to_vec(),
-        );
-        let mut temp_sha3_uncles = [0; 32];
-        for i in 0..decoded_sha3_uncles_hex.len() {
-            temp_sha3_uncles[i] = decoded_sha3_uncles_hex[i];
-        }
-        let uncles_hash = H256::from(temp_sha3_uncles);
-
-        // debug::native::info!("Decoding state_root!");
-        let decoded_state_root_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"stateRoot".to_vec(),
-        );
-        let mut temp_state_root = [0; 32];
-        for i in 0..decoded_state_root_hex.len() {
-            temp_state_root[i] = decoded_state_root_hex[i];
-        }
-        let state_root = H256::from(temp_state_root);
-
-        // debug::native::info!("Decoding transactions_root!");
-        let decoded_transactions_root_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"transactionsRoot".to_vec(),
-        );
-        let mut temp_transactions_root = [0; 32];
-        for i in 0..decoded_transactions_root_hex.len() {
-            temp_transactions_root[i] = decoded_transactions_root_hex[i];
-        }
-        let transactions_root = H256::from(temp_transactions_root);
-
-        // debug::native::info!("Decoding timestamp!");
-        let decoded_timestamp_hex = Self::extract_property_from_block(
-            block.clone(),
-            b"timestamp".to_vec(),
-        );
-        let timestamp =
-            U256::from_big_endian(&decoded_timestamp_hex[..]).as_u64();
-
-        let block = types::BlockHeader {
-            parent_hash,
-            uncles_hash,
-            author: miner,
-            state_root,
-            transactions_root,
-            receipts_root,
-            log_bloom: logs_bloom,
-            difficulty,
-            number,
-            gas_limit,
-            gas_used,
-            timestamp,
-            extra_data: decoded_extra_data_hex,
-            mix_hash,
-            nonce,
-            hash: Some(hash),
-            partial_hash: None,
-        };
-
-        block
-    }
-
-    pub fn extract_property_from_block(
-        block: Option<Vec<(Vec<char>, JsonValue)>>,
-        property: Vec<u8>,
-    ) -> Vec<u8> {
-        let extracted_hex: Vec<char> = block
-            .unwrap()
-            .into_iter()
-            .find(|(k, _)| {
-                k.iter().map(|c| *c as u8).collect::<Vec<u8>>() == property
-            })
-            .and_then(|v| match v.1 {
-                JsonValue::String(n) => Some(n),
-                _ => None,
-            })
-            .unwrap();
-        let decoded_hex = hex_to_bytes(&extracted_hex).unwrap();
-        decoded_hex
+        )
     }
 }
 

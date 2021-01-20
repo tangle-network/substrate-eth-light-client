@@ -1295,16 +1295,15 @@ dependencies = [
 [[package]]
 name = "ethash"
 version = "0.4.1"
-source = "git+https://github.com/edgeware-builders/ethash?branch=rust-proof#88b157770f5b9ac40328e5188f6b1ae3d085ad59"
+source = "git+https://github.com/edgeware-builders/ethash?branch=rust-proof#001c98cc1983613f9aaf2d7c58672d49c602252e"
 dependencies = [
  "byteorder",
- "ethereum-types 0.8.0",
+ "ethereum-types 0.9.2",
  "lazy_static",
  "num_cpus",
  "parking_lot 0.11.1",
  "rayon",
  "rlp",
- "rlp-derive",
  "sha2 0.8.2",
  "sha3 0.8.2",
  "tiny-keccak 2.0.2",
@@ -1320,18 +1319,6 @@ dependencies = [
  "fixed-hash 0.3.2",
  "impl-rlp",
  "impl-serde 0.2.3",
- "tiny-keccak 1.5.0",
-]
-
-[[package]]
-name = "ethbloom"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32cfe1c169414b709cf28aa30c74060bdb830a03a8ba473314d079ac79d80a5f"
-dependencies = [
- "crunchy",
- "fixed-hash 0.5.2",
- "impl-rlp",
  "tiny-keccak 1.5.0",
 ]
 
@@ -1377,19 +1364,6 @@ dependencies = [
  "impl-serde 0.2.3",
  "primitive-types 0.3.0",
  "uint 0.7.1",
-]
-
-[[package]]
-name = "ethereum-types"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba744248e3553a393143d5ebb68939fc3a4ec0c22a269682535f5ffe7fed728c"
-dependencies = [
- "ethbloom 0.8.1",
- "fixed-hash 0.5.2",
- "impl-rlp",
- "primitive-types 0.6.2",
- "uint 0.8.5",
 ]
 
 [[package]]
@@ -1509,18 +1483,6 @@ dependencies = [
  "rand 0.5.6",
  "rustc-hex",
  "static_assertions 0.2.5",
-]
-
-[[package]]
-name = "fixed-hash"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3367952ceb191f4ab95dd5685dc163ac539e36202f9fcfd0cb22f9f9c542fefc"
-dependencies = [
- "byteorder",
- "rand 0.7.3",
- "rustc-hex",
- "static_assertions 1.1.0",
 ]
 
 [[package]]
@@ -4225,6 +4187,7 @@ dependencies = [
 name = "pallet-worker"
 version = "2.0.0"
 dependencies = [
+ "byteorder",
  "ethash",
  "ethereum",
  "ethereum-types 0.9.2",
@@ -4240,7 +4203,6 @@ dependencies = [
  "rlp-derive",
  "safe-mix",
  "serde",
- "serde_derive",
  "serde_json",
  "sha3 0.8.2",
  "sp-application-crypto",
@@ -4749,18 +4711,6 @@ dependencies = [
  "impl-rlp",
  "impl-serde 0.2.3",
  "uint 0.7.1",
-]
-
-[[package]]
-name = "primitive-types"
-version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4336f4f5d5524fa60bcbd6fe626f9223d8142a50e7053e979acdf0da41ab975"
-dependencies = [
- "fixed-hash 0.5.2",
- "impl-codec 0.4.2",
- "impl-rlp",
- "uint 0.8.5",
 ]
 
 [[package]]
