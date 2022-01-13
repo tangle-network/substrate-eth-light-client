@@ -51,7 +51,7 @@ pub mod mock;
 mod tests;
 
 use codec::{Codec, Decode, Encode};
-use sp_core::hashing::{keccak_256, sha2_256};
+use sp_io::hashing::{keccak_256, sha2_256};
 use sp_runtime::{traits::{Saturating, Zero}, offchain::http};
 use sp_std::prelude::*;
 

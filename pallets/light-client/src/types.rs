@@ -7,6 +7,7 @@ use rlp_derive::{
 use codec::{Encode, Decode};
 use scale_info::TypeInfo;
 use sp_std::vec::Vec;
+use hex;
 
 extern crate alloc;
 use alloc::string::String;
@@ -326,16 +327,12 @@ impl From<BlockWithProofsRaw> for BlockWithProofs {
             merkle_proofs: raw
                 .merkle_proofs
                 .into_iter()
-                .map(|v| hex::decode(&v))
-                .flatten()
-                .map(|v| H128::from_slice(&v))
+                .map(|v| v.parse::<H128>().unwrap())
                 .collect(),
             elements: raw
                 .elements
                 .into_iter()
-                .map(|v| hex::decode(&v))
-                .flatten()
-                .map(|v| H256::from_slice(&v))
+                .map(|v| v.parse::<H256>().unwrap())
                 .collect(),
         }
     }

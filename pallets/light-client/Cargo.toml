@@ -59,6 +59,7 @@ std = [
 	"ethash/std",
 	"ethereum-types/std",
 	"rlp/std",
+	"hex/std",
 	"light-client-primitives/std",
 ]
 runtime-benchmarks = [
