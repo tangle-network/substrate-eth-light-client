@@ -12,4 +12,4 @@ use_field_init_shorthand = true
 use_try_shorthand = true
 normalize_doc_attributes = true
 report_fixme = "Always"
-edition = "2018"
+edition = "2021"

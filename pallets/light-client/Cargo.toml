@@ -1,0 +1,68 @@
+[package]
+authors = ["Webb Technologies Inc."]
+description = "FRAME pallet template for defining custom runtime logic."
+edition = "2018"
+homepage = "https://substrate.dev"
+license = "Unlicense"
+name = "pallet-eth-light-client"
+repository = "https://github.com/substrate-developer-hub/substrate-darkwebb-node/"
+version = "1.0.0"
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+
+[dependencies]
+codec = { package = "parity-scale-codec", version = "2.3.0", default-features = false, features = ["derive", "max-encoded-len"] }
+scale-info = { version = "1.0", default-features = false, features = ["derive"] }
+
+frame-support = { default-features = false, git = "https://github.com/paritytech/substrate.git", branch = "master" }
+frame-system = { default-features = false, git = "https://github.com/paritytech/substrate.git", branch = "master" }
+sp-core = { default-features = false, git = "https://github.com/paritytech/substrate.git", branch = "master" }
+sp-runtime = { default-features = false, git = "https://github.com/paritytech/substrate.git", branch = "master" }
+sp-io = { default-features = false, git = "https://github.com/paritytech/substrate.git", branch = "master" }
+sp-std = { default-features = false, git = "https://github.com/paritytech/substrate.git", branch = "master" }
+
+light-client-primitives = { path = "../../primitives", default-features = false }
+frame-system-benchmarking = { default-features = false, git = "https://github.com/paritytech/substrate.git", branch = "master", optional = true }
+frame-benchmarking = { default-features = false, git = "https://github.com/paritytech/substrate.git", branch = "master", optional = true }
+
+lite-json = { version = "0.1", default-features = false }
+ethereum = { version = "0.11.1", default-features = false, features = ["with-codec"] }
+ethereum-types = { version = "0.12", default-features = false, features = ["rlp"] }
+rlp = { version = "0.5", default-features = false }
+rlp-derive = { version = "0.1.0", default-features = false }
+byteorder = { version = "1", default-features = false }
+sha3 = { version = "0.10", default-features = false }
+hex = { version = "0.4", default-features = false }
+tiny-keccak = { version = "2.0.1", features = ["keccak"] }
+ethash = { git = "https://github.com/webb-tools/ethash", default-features = false, features = ["withproofs"] }
+lazy_static = { version = "1.4", default-features = false, features = ["spin_no_std"] }
+
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+pallet-balances = { git = "https://github.com/paritytech/substrate.git", branch = "master" }
+
+
+[features]
+default = ["std"]
+std = [
+	"codec/std",
+	"frame-support/std",
+	"frame-system/std",
+	"sp-runtime/std",
+	"sp-io/std",
+	"sp-std/std",
+	"lite-json/std",
+	"ethereum/std",
+	"ethash/std",
+	"ethereum-types/std",
+	"rlp/std",
+	"light-client-primitives/std",
+]
+runtime-benchmarks = [
+	"frame-benchmarking",
+	"frame-system/runtime-benchmarks",
+	"frame-support/runtime-benchmarks",
+]
