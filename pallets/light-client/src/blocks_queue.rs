@@ -48,52 +48,52 @@ impl<F: BlockFetcher> BlockQueue<F> {
     /// `BlockFetcher`. if this the a new queue, it will fetch the latest
     /// header.
     pub fn fetch_next_block(&mut self) -> Result<BlockHeader, F::Error> {
-        debug::native::debug!("Fetching next block...");
+        // debug::native::debug!("Fetching next block...");
         if let Some(last_seen_block_number) = &self.last_seen_block_number {
-            debug::native::debug!(
-                "last seen block number is: {}",
-                last_seen_block_number
-            );
+            // debug::native::debug!(
+            //     "last seen block number is: {}",
+            //     last_seen_block_number
+            // );
             let next = self.block_fetcher.fetch_one(last_seen_block_number + 1);
             match next {
                 Ok(block) => {
-                    debug::native::debug!(
-                        "got block #{} adding to the queue.",
-                        block.number
-                    );
+                    // debug::native::debug!(
+                    //     "got block #{} adding to the queue.",
+                    //     block.number
+                    // );
                     self.last_seen_block_number = Some(block.number.as_u64());
                     self.inner.push_back(block);
                     let b = self
                         .inner
                         .pop_front()
                         .expect("queue have at least one header");
-                    debug::native::debug!(
-                        "got block #{} from the queue",
-                        b.number
-                    );
+                    // debug::native::debug!(
+                    //     "got block #{} from the queue",
+                    //     b.number
+                    // );
                     Ok(b)
                 },
                 Err(e) => {
-                    debug::native::warn!(
-                        "got error while fetching #{}",
-                        last_seen_block_number
-                    );
+                    // debug::native::warn!(
+                    //     "got error while fetching #{}",
+                    //     last_seen_block_number
+                    // );
                     if let Some(front) = self.inner.pop_front() {
-                        debug::native::debug!(
-                            "but we still have #{} on the queue, reading it.",
-                            front.number
-                        );
+                        // debug::native::debug!(
+                        //     "but we still have #{} on the queue, reading it.",
+                        //     front.number
+                        // );
                         Ok(front)
                     } else {
-                        debug::native::warn!("oh no, an empty queue!!!!");
+                        // debug::native::warn!("oh no, an empty queue!!!!");
                         Err(e)
                     }
                 },
             }
         } else {
-            debug::native::info!("new queue, fetching latest block..");
+            // debug::native::info!("new queue, fetching latest block..");
             let latest = self.block_fetcher.fetch_latest()?;
-            debug::native::info!("got latest block: #{}", latest.number);
+            // debug::native::info!("got latest block: #{}", latest.number);
             self.last_seen_block_number = Some(latest.number.as_u64());
             Ok(latest)
         }
@@ -151,7 +151,7 @@ pub struct Infura;
 
 impl Infura {
     fn fetch_block(block: &str) -> Result<BlockHeader, http::Error> {
-        debug::native::debug!("INFURA: getBlockByNumber({})", block);
+        // debug::native::debug!("INFURA: getBlockByNumber({})", block);
         let body = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "eth_getBlockByNumber",
@@ -169,7 +169,7 @@ impl Infura {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let result = json["result"].clone();
         if result.is_null() {
-            debug::native::warn!("INFURA: {}", json);
+            // debug::native::warn!("INFURA: {}", json);
             return Err(http::Error::IoError);
         }
         let block: InfuraBlockHeader = serde_json::from_value(result).unwrap();

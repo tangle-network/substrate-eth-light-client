@@ -1,6 +1,6 @@
 [workspace]
 members = [
-	"pallets/worker",
+	"pallets/light-client",
 	"node",
 	"runtime",
 ]
