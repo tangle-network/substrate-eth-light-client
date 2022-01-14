@@ -1,7 +1,9 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use crate::*;
+use ethereum::ReceiptV3;
 use rlp::Rlp;
+use sp_std::vec::Vec;
 
 pub trait Prover {
     fn extract_nibbles(a: Vec<u8>) -> Vec<u8>;
@@ -38,7 +40,7 @@ pub trait Prover {
     ) -> bool;
 }
 
-impl<T: Config> Prover for Module<T> {
+impl<T: Config> Prover for Pallet<T> {
     fn extract_nibbles(a: Vec<u8>) -> Vec<u8> {
         a.iter().flat_map(|b| vec![b >> 4, b & 0x0F]).collect()
     }
@@ -72,20 +74,42 @@ impl<T: Config> Prover for Module<T> {
     ) -> bool {
         let log_entry: ethereum::Log =
             rlp::decode(log_entry_data.as_slice()).unwrap();
-        let receipt: ethereum::Receipt =
+        let receipt: ethereum::ReceiptV3 =
             rlp::decode(receipt_data.as_slice()).unwrap();
         let header: ethereum::Header =
             rlp::decode(header_data.as_slice()).unwrap();
 
-        // Verify log_entry included in receipt
-        if receipt.logs[log_index as usize] == log_entry {
-            return false;
-        }
+        let r = match receipt {
+            ReceiptV3::EIP1559(r) => {
+                // Verify log_entry included in receipt
+                if r.logs[log_index as usize] == log_entry {
+                    return false;
+                }
+
+                r
+            },
+            ReceiptV3::EIP2930(r) => {
+                // Verify log_entry included in receipt
+                if r.logs[log_index as usize] == log_entry {
+                    return false;
+                }
+
+                r
+            },
+            ReceiptV3::Legacy(r) => {
+                // Verify log_entry included in receipt
+                if r.logs[log_index as usize] == log_entry {
+                    return false;
+                }
+                
+                r
+            },
+        };
 
         // Verify receipt included into header
         let verification_result = Self::verify_trie_proof(
             header.receipts_root,
-            rlp::encode(&receipt_index),
+            rlp::encode(&receipt_index).to_vec(),
             proof,
             receipt_data,
         );
