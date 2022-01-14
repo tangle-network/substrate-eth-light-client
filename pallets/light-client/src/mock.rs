@@ -1,14 +1,17 @@
 use super::*;
 use crate as pallet_evm_light_client;
 
-use frame_support::parameter_types;
+use frame_support::{parameter_types, traits::{ConstU64, ConstU128}};
 use frame_system as system;
-use sp_core::H256;
-use sp_runtime::{
-	testing::Header,
-	traits::{BlakeTwo256, IdentityLookup},
+use sp_core::{
+	offchain::{testing, OffchainWorkerExt, TransactionPoolExt},
+	sr25519::Signature,
+	H256,
+};use sp_runtime::{
+	testing::{Header, TestXt},
+	traits::{BlakeTwo256, Extrinsic as ExtrinsicT, IdentifyAccount, IdentityLookup, Verify},
+	RuntimeAppPublic, AccountId32,
 };
-
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
 
@@ -31,29 +34,30 @@ parameter_types! {
 }
 
 impl system::Config for Test {
-	type AccountData = pallet_balances::AccountData<u128>;
-	type AccountId = u64;
 	type BaseCallFilter = frame_support::traits::Everything;
-	type BlockHashCount = BlockHashCount;
-	type BlockLength = ();
-	type BlockNumber = u64;
 	type BlockWeights = ();
-	type Call = Call;
+	type BlockLength = ();
 	type DbWeight = ();
-	type Event = Event;
-	type Hash = H256;
-	type Hashing = BlakeTwo256;
-	type Header = Header;
-	type Index = u64;
-	type Lookup = IdentityLookup<Self::AccountId>;
-	type OnKilledAccount = ();
-	type OnNewAccount = ();
-	type OnSetCode = ();
 	type Origin = Origin;
-	type PalletInfo = PalletInfo;
-	type SS58Prefix = SS58Prefix;
-	type SystemWeightInfo = ();
+	type Index = u64;
+	type BlockNumber = u64;
+	type Hash = H256;
+	type Call = Call;
+	type Hashing = BlakeTwo256;
+	type AccountId = sp_core::sr25519::Public;
+	type Lookup = IdentityLookup<Self::AccountId>;
+	type Header = Header;
+	type Event = Event;
+	type BlockHashCount = ConstU64<250>;
 	type Version = ();
+	type PalletInfo = PalletInfo;
+	type AccountData = pallet_balances::AccountData<u128>;
+	type OnNewAccount = ();
+	type OnKilledAccount = ();
+	type SystemWeightInfo = ();
+	type SS58Prefix = ();
+	type OnSetCode = ();
+	type MaxConsumers = frame_support::traits::ConstU32<16>;
 }
 
 parameter_types! {
@@ -61,14 +65,14 @@ parameter_types! {
 }
 
 impl pallet_balances::Config for Test {
-	type AccountStore = System;
-	type Balance = u128;
-	type DustRemoval = ();
-	type Event = Event;
-	type ExistentialDeposit = ExistentialDeposit;
 	type MaxLocks = ();
 	type MaxReserves = ();
 	type ReserveIdentifier = [u8; 8];
+	type Balance = u128;
+	type DustRemoval = ();
+	type Event = Event;
+	type ExistentialDeposit = ConstU128<1>;
+	type AccountStore = System;
 	type WeightInfo = ();
 }
 
@@ -84,6 +88,9 @@ impl pallet_evm_light_client::Config for Test {
 	type AuthorityId = light_client_primitives::crypto::OffchainAuthId;
 	type Call = Call;
 }
+
+type Extrinsic = TestXt<Call, ()>;
+type AccountId = <<Signature as Verify>::Signer as IdentifyAccount>::AccountId;
 
 impl frame_system::offchain::SigningTypes for Test {
 	type Public = <Signature as Verify>::Signer;
@@ -115,9 +122,5 @@ where
 // Build genesis storage according to the mock runtime.
 pub fn new_test_ext() -> sp_io::TestExternalities {
 	let mut storage = system::GenesisConfig::default().build_storage::<Test>().unwrap();
-	let _ = pallet_balances::GenesisConfig::<Test> {
-		balances: vec![(1, 10u128.pow(18)), (2, 20u128.pow(18)), (3, 30u128.pow(18))],
-	}
-	.assimilate_storage(&mut storage);
 	storage.into()
 }

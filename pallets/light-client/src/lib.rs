@@ -119,7 +119,7 @@ use sp_runtime::offchain::storage::StorageValueRef;
 
 	#[pallet::genesis_config]
 	pub struct GenesisConfig<T: Config> {
-		pub phantom: (PhantomData<T>),
+		pub phantom: PhantomData<T>,
 	}
 
 	#[cfg(feature = "std")]
