@@ -7,7 +7,6 @@ use rlp_derive::{
 use codec::{Encode, Decode};
 use scale_info::TypeInfo;
 use sp_std::vec::Vec;
-use hex;
 
 extern crate alloc;
 use alloc::string::String;
