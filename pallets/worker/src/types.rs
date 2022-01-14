@@ -4,25 +4,17 @@ use rlp::{Rlp, RlpStream};
 use rlp_derive::{
     RlpDecodable as RlpDecodableDerive, RlpEncodable as RlpEncodableDerive,
 };
-use codec::{Encode, Decode};
-use scale_info::TypeInfo;
-use sp_std::vec::Vec;
 
+#[cfg(not(feature = "std"))]
 extern crate alloc;
+#[cfg(not(feature = "std"))]
 use alloc::string::String;
 
 use sp_runtime::RuntimeDebug;
 
-/// Minimal information about a header.
-#[derive(Clone, Encode, Decode, TypeInfo)]
-pub struct HeaderInfo {
-    pub total_difficulty: U256,
-    pub parent_hash: H256,
-    pub number: U256,
-}
-
 // TODO(shekohex) clean up the following code
 // add a trait for doing this work.
+
 fn hex_to_h256(v: String) -> H256 {
     let s = &mut v[2..].as_bytes().to_vec();
     if s.len() % 2 != 0 {
@@ -68,7 +60,7 @@ fn hex_to_address(v: String) -> Address {
     Address::from_slice(&b)
 }
 
-#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq, PartialOrd, Ord, TypeInfo)]
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BlockHeader {
     pub parent_hash: H256,
     pub uncles_hash: H256,
@@ -87,7 +79,7 @@ pub struct BlockHeader {
     pub nonce: H64,
 }
 
-#[derive(Debug, Clone, serde::Deserialize, TypeInfo)]
+#[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InfuraBlockHeader {
     pub difficulty: String,
@@ -112,6 +104,7 @@ pub struct InfuraBlockHeader {
 
 impl Into<BlockHeader> for InfuraBlockHeader {
     fn into(self) -> BlockHeader {
+        debug::native::info!("{:#?}", self);
         let extra_data = hex::decode(&self.extra_data[2..])
             .expect("bad extra data hex value");
         BlockHeader {
@@ -198,7 +191,7 @@ impl rlp::Decodable for BlockHeader {
     }
 } // Log
 
-#[derive(Default, Debug, Clone, PartialEq, Eq, TypeInfo)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct LogEntry {
     pub address: H160,
     pub topics: Vec<H256>,
@@ -228,7 +221,7 @@ impl rlp::Encodable for LogEntry {
 // Receipt Header
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, RlpEncodableDerive, RlpDecodableDerive, TypeInfo
+    Debug, Clone, PartialEq, Eq, RlpEncodableDerive, RlpDecodableDerive,
 )]
 pub struct Receipt {
     pub status: bool,
@@ -243,7 +236,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     buffer
 }
 
-#[derive(RuntimeDebug, Default, Clone, Encode, Decode, PartialEq, TypeInfo)]
+#[derive(RuntimeDebug, Default, Clone, Encode, Decode, PartialEq)]
 pub struct DoubleNodeWithMerkleProof {
     pub dag_nodes: [H512; 2],
     pub proof: Vec<H128>,
@@ -294,12 +287,12 @@ impl DoubleNodeWithMerkleProof {
     }
 }
 
-#[derive(Debug, serde::Serialize, TypeInfo)]
+#[derive(Debug, serde::Serialize)]
 pub struct ProofsPayload {
     pub rlp: String,
 }
 
-#[derive(Debug, serde::Deserialize, TypeInfo)]
+#[derive(Debug, serde::Deserialize)]
 pub struct BlockWithProofsRaw {
     pub number: u64,
     pub proof_length: u64,
@@ -308,7 +301,7 @@ pub struct BlockWithProofsRaw {
     pub merkle_proofs: Vec<String>,
 }
 
-#[derive(Debug, TypeInfo)]
+#[derive(Debug)]
 pub struct BlockWithProofs {
     pub proof_length: u64,
     pub merkle_root: H128,
@@ -326,12 +319,16 @@ impl From<BlockWithProofsRaw> for BlockWithProofs {
             merkle_proofs: raw
                 .merkle_proofs
                 .into_iter()
-                .map(|v| v.parse::<H128>().unwrap())
+                .map(|v| hex::decode(&v))
+                .flatten()
+                .map(|v| H128::from_slice(&v))
                 .collect(),
             elements: raw
                 .elements
                 .into_iter()
-                .map(|v| v.parse::<H256>().unwrap())
+                .map(|v| hex::decode(&v))
+                .flatten()
+                .map(|v| H256::from_slice(&v))
                 .collect(),
         }
     }

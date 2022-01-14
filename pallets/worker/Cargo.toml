@@ -1,0 +1,66 @@
+[package]
+authors = ['Anonymous']
+edition = '2018'
+name = 'pallet-worker'
+version = "2.0.0"
+license = "Unlicense"
+homepage = "https://substrate.dev"
+repository = "https://github.com/paritytech/substrate/"
+description = "FRAME pallet worker for defining custom runtime logic."
+readme = "README.md"
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+
+[dependencies]
+codec = { package = "parity-scale-codec", version = "1.3.4", default-features = false, features = ["derive"] }
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+safe-mix = { version = "1.0", default-features = false }
+sp-application-crypto = { git = "https://github.com/paritytech/substrate.git", default-features = false }
+sp-arithmetic = { git = "https://github.com/paritytech/substrate.git", default-features = false }
+sp-std = { git = "https://github.com/paritytech/substrate.git", default-features = false }
+sp-io = { git = "https://github.com/paritytech/substrate.git", default-features = false }
+sp-core = { git = "https://github.com/paritytech/substrate.git", default-features = false }
+sp-runtime = { git = "https://github.com/paritytech/substrate.git", default-features = false }
+frame-support = { git = "https://github.com/paritytech/substrate.git", default-features = false }
+frame-system = { git = "https://github.com/paritytech/substrate.git", default-features = false }
+pallet-timestamp = { git = "https://github.com/paritytech/substrate.git", default-features = false }
+lite-json = { git = "https://github.com/jnaviask/lite-json.git", branch = "jnaviask.fix-empty-array-parsing", default-features = false }
+ethereum = { version = "0.4", default-features = false, features = ["with-codec"] }
+ethereum-types = { version = "0.9", default-features = false }
+rlp = { version = "0.4", default-features = false }
+rlp-derive = { version = "0.1.0", default-features = false }
+byteorder = { version = "1", default-features = false }
+sha3 = { version = "0.8", default-features = false }
+hex = { version = "0.4", default-features = false }
+tiny-keccak = { version = "2.0.1", features = ["keccak"] }
+ethash = { git = "https://github.com/edgeware-builders/ethash", branch = "rust-proof", default-features = false, features = ["withproofs"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+lazy_static = { version = "1.4", default-features = false, features = ["spin_no_std"] }
+
+[dev-dependencies]
+web3 = "0.8.0"
+futures = "0.1.26"
+lazy_static = "1.4.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[features]
+default = ["std"]
+std = [
+	"serde/std",
+	"safe-mix/std",
+	"codec/std",
+	"sp-application-crypto/std",
+	"sp-arithmetic/std",
+	"sp-std/std",
+	"sp-runtime/std",
+	"frame-support/std",
+	"frame-system/std",
+	"pallet-timestamp/std",
+	"lite-json/std",
+	"ethereum/std",
+	"ethash/std",
+	"ethereum-types/std",
+	"rlp/std",
+]
